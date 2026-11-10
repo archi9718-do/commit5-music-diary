@@ -6,7 +6,10 @@ import time
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-MODEL_DIR = r"C:\work\moodwave_data\models\klue-bert-base-sentiment"  # 어제 저장한 모델 폴더
+MODEL_DIR = r"C:\work\moodwave_data\models\klue-bert-base-sentiment"  # 저장한 모델 폴더
+
+# 서버(schemas.py)와 같은 4종 감정 이름
+EMOTIONS = ("좋음", "무난함", "가라앉음", "예민함")
 
 # 60가지 감정 번호 → 4종 묶음 (번호는 download_model.py 출력 기준)
 GROUPS = {
@@ -21,9 +24,13 @@ EXCLUDED = [24, 25, 34, 40, 41, 42, 46, 49]  # 당황·놀람처럼 애매해서
 HIGH = 0.6
 MID = 0.4
 
+# 결과 양식의 소수 자리 (건호와 약속한 둘째 자리 유지)
+DIGITS = 2
+
 # 묶음표 점검: 0~59번이 빠짐없이, 한 번씩만 들어갔는지 확인
 all_ids = sorted(sum(GROUPS.values(), []) + EXCLUDED)
 assert all_ids == list(range(60)), "묶음표에 빠지거나 겹친 번호가 있습니다"
+assert set(GROUPS) == set(EMOTIONS), "묶음 이름이 서버 감정 이름과 다릅니다"
 
 # 모델 불러오기 (인터넷 없이 저장된 폴더에서)
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -40,6 +47,14 @@ def get_confidence(top_prob: float) -> str:
     return "낮음"       # 4개 버튼
 
 
+def fix_probs_sum(probs: dict, top: str, digits: int = DIGITS) -> dict:
+    """반올림한 뒤 남는 오차를 가장 높은 감정(top)에 더해, 4종 합을 정확히 1로 맞춥니다."""
+    rounded = {k: round(float(probs[k]), digits) for k in EMOTIONS}
+    gap = 1.0 - sum(rounded.values())                 # 반올림 때문에 생긴 1과의 차이
+    rounded[top] = round(rounded[top] + gap, digits)  # 차이를 가장 큰 값에 몰기
+    return rounded
+
+
 def predict_emotion(text: str, record_id=None) -> dict:
     """문장 하나를 받아 건호와 약속한 결과 양식(dict)으로 돌려줍니다."""
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128).to(device)
@@ -51,17 +66,19 @@ def predict_emotion(text: str, record_id=None) -> dict:
     total = sum(sums.values())  # 제외한 감정을 뺀 나머지 합
 
     if total < 1e-6:  # 거의 모든 확률이 제외 감정에 몰린 경우: 판단 보류
-        probs4 = {name: 0.25 for name in GROUPS}
+        probs4 = {name: 0.25 for name in EMOTIONS}
     else:
         probs4 = {name: v / total for name, v in sums.items()}  # 4종 합이 1이 되도록 나누기
 
-    emotion = max(probs4, key=probs4.get)  # 확률이 가장 높은 감정
+    emotion = max(probs4, key=probs4.get)        # 확률이 가장 높은 감정 (반올림 전 값 기준)
+    probs_out = fix_probs_sum(probs4, emotion)   # 반올림 + 합 1로 보정
+
     return {
         "record_id": record_id,
         "text": text,
-        "probs": {k: round(v, 2) for k, v in probs4.items()},
+        "probs": probs_out,
         "emotion": emotion,
-        "confidence": get_confidence(probs4[emotion]),
+        "confidence": get_confidence(probs_out[emotion]),  # 화면에 보이는 숫자와 같은 값으로 판단
     }
 
 
@@ -80,5 +97,6 @@ if __name__ == "__main__":
         start = time.perf_counter()
         result = predict_emotion(text, record_id=i)
         ms = (time.perf_counter() - start) * 1000  # 처리 시간(밀리초)
+        total = sum(result["probs"].values())
         print(json.dumps(result, ensure_ascii=False))  # ensure_ascii=False: 한글이 깨지지 않게
-        print(f"  처리 시간: {ms:.0f}ms")
+        print(f"  처리 시간: {ms:.0f}ms, 확률합: {total:.4f}")
