@@ -1,0 +1,14 @@
+song_id,dataset,original_id,valence_raw,arousal_raw,raw_scale,valence,arousal,label_type,audio_status,source_file,ratings_count
+deam_2,DEAM,2,2.6,3.4,1-9,0.20,0.30,static,not_checked,test_fixture.csv,3
+deam_3,DEAM,3,4.6,3.56,1-9,0.45,0.32,static,not_checked,test_fixture.csv,3
+deam_4,DEAM,4,6.6,3.8,1-9,0.70,0.35,static,not_checked,test_fixture.csv,3
+deam_5,DEAM,5,3.0,7.8,1-9,0.25,0.85,static,not_checked,test_fixture.csv,3
+deam_6,DEAM,6,3.4,5,1-9,0.30,0.50,static,not_checked,test_fixture.csv,3
+deam_7,DEAM,7,5.4,3.4,1-9,0.55,0.30,static,not_checked,test_fixture.csv,3
+deam_8,DEAM,8,7.48,6.52,1-9,0.81,0.69,static,not_checked,test_fixture.csv,3
+deam_9,DEAM,9,7.24,6.76,1-9,0.78,0.72,static,not_checked,test_fixture.csv,3
+deam_10,DEAM,10,7.56,6.44,1-9,0.82,0.68,static,not_checked,test_fixture.csv,3
+deam_11,DEAM,11,5,4.2,1-9,0.50,0.40,static,not_checked,test_fixture.csv,3
+deam_12,DEAM,12,5.4,4.6,1-9,0.55,0.45,static,not_checked,test_fixture.csv,3
+deam_13,DEAM,13,5.16,4.36,1-9,0.52,0.42,static,not_checked,test_fixture.csv,3
+pmemo_20,PMEmo,20,0.80,0.70,0-1,0.80,0.70,static,not_checked,test_fixture.csv,1
