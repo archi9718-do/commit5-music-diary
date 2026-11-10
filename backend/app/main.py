@@ -5,8 +5,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import connect, init_db
-from .recommender import recommend_three
-from .schemas import EmotionResult, RecommendationRequest, RecommendationResponse, RecordCreate
+from .recommender import ScoreDataError, recommend_three
+from .schemas import (
+    EmotionResult,
+    RecommendationRequest,
+    RecommendationResponse,
+    RecordCreate,
+)
 
 
 @asynccontextmanager
@@ -17,7 +22,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="MoodWave Backend (MVP)",
-    description="감정 결과 -> 임시 3곡 추천 -> 그날의 판 저장용 개발 서버",
+    description="감정 결과 -> 점수 기반 3곡 추천 -> 그날의 판 저장용 개발 서버",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -72,8 +77,12 @@ def save_emotion_result(payload: EmotionResult):
 
 @app.post("/api/recommendations", response_model=RecommendationResponse, tags=["3곡 추천"])
 def create_recommendations(payload: RecommendationRequest):
-    """사용자 확인 감정을 기준으로 (아직은 가상 곡) 3곡을 추천 및 DB 저장합니다."""
-    songs = recommend_three(payload.confirmed_emotion)
+    """확정 감정으로 3곡을 추천하고 결과를 DB에 저장합니다."""
+    try:
+        songs = recommend_three(payload.confirmed_emotion)
+    except ScoreDataError as exc:
+        # 서버 내부의 파일 경로를 사용자에게 노출하지 않습니다.
+        raise HTTPException(status_code=503, detail="음악 점수 데이터가 준비되지 않았습니다. 서버 설정을 확인하세요.") from exc
     con = connect()
     try:
         with con:

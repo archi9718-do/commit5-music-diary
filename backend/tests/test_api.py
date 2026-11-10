@@ -6,8 +6,17 @@ from pathlib import Path
 TEST_DIR = tempfile.TemporaryDirectory()
 os.environ["MOODWAVE_DB_PATH"] = str(Path(TEST_DIR.name) / "test.db")
 
-from fastapi.testclient import TestClient  # noqa: E402
-from app.main import app  # noqa: E402
+import pytest
+from app.main import app
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def setup_recommendation_fixture(monkeypatch):
+    """실제 연구용 점수 CSV 대신 인공 테스트 점수만 사용해 API를 검증합니다."""
+    csv_path = Path(__file__).parent / "fixtures" / "sample_song_scores.csv"
+    monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(csv_path))
+    monkeypatch.setenv("MOODWAVE_RECOMMEND_SCOPE", "DEAM")
 
 
 def test_record_emotion_recommendation_lp():
@@ -37,7 +46,7 @@ def test_record_emotion_recommendation_lp():
         songs = recommended.json()["songs"]
         assert len(songs) == 3
         assert [song["step"] for song in songs] == ["맞추기", "조금 밝게", "더 밝게"]
-        assert all(song["song_id"].startswith("mock_") for song in songs)
+        assert all(song["song_id"].startswith("deam_") for song in songs)
 
         lp = client.get(f"/api/records/{record_id}/lp")
         assert lp.status_code == 200
