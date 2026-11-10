@@ -29,3 +29,8 @@ raw_data/
 *.pt
 *.pth
 *.safetensors
+
+# 감정 모델 (상현)
+models/
+hf_cache/
+*.bin
