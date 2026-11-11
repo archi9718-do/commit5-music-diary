@@ -5,10 +5,10 @@
 import json
 import time
 
-try:
+if __package__:
     # 서버에서 ai.emotion.service로 불러올 때 (패키지 방식)
     from .emotion_mapper import EMOTIONS, get_model_dir, load_model, predict_emotion
-except ImportError:
+else:
     # 이 폴더에서 python service.py로 직접 실행할 때
     from emotion_mapper import EMOTIONS, get_model_dir, load_model, predict_emotion
 
