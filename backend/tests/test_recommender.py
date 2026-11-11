@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+
 from app.recommender import ScoreDataError, load_song_scores, recommend_three
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_song_scores.csv"

@@ -7,8 +7,9 @@ TEST_DIR = tempfile.TemporaryDirectory()
 os.environ["MOODWAVE_DB_PATH"] = str(Path(TEST_DIR.name) / "test.db")
 
 import pytest
-from app.main import app
 from fastapi.testclient import TestClient
+
+from app.main import app
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,12 @@
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 from .db import connect, init_db
 from .recommender import ScoreDataError, recommend_three
@@ -13,10 +17,51 @@ from .schemas import (
     RecordCreate,
 )
 
+logger = logging.getLogger("moodwave")
+
+# --- 감정 인식(상현) 연결 -------------------------------------------------
+# backend/ 폴더에서 서버를 켜도 저장소 최상위의 ai/ 폴더를 찾을 수 있게 경로를 추가합니다.
+REPO_ROOT = Path(__file__).resolve().parents[2]  # main.py → app → backend → 저장소 최상위
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+try:
+    # torch·transformers가 없는 컴퓨터에서는 여기서 실패합니다. 실패해도 서버는 켜집니다.
+    from ai.emotion import service as emotion_service
+# 의도한 넓은 예외 처리: torch·모델 패키지에서 어떤 오류가 나도 서버는 켜져야 합니다.
+except Exception as exc:  # noqa: BLE001
+    emotion_service = None
+    _EMOTION_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+else:
+    _EMOTION_IMPORT_ERROR = ""
+
+# 감정 분석을 쓸 수 있는지 기록해 두는 상태값 (서버가 켜질 때 정해집니다)
+EMOTION_STATUS = {"ready": False, "reason": "서버 시작 전"}
+
+
+def prepare_emotion_model() -> None:
+    """감정 모델을 미리 불러옵니다. 실패해도 서버는 켜지고, 분석 경로만 503을 돌려줍니다."""
+    EMOTION_STATUS["ready"] = False
+    if emotion_service is None:
+        EMOTION_STATUS["reason"] = f"감정 분석 패키지를 불러오지 못했습니다 ({_EMOTION_IMPORT_ERROR})"
+        logger.warning("감정 분석 꺼짐: %s", EMOTION_STATUS["reason"])
+        return
+    try:
+        emotion_service.warm_up()  # 모델을 한 번만 읽고 첫 예측을 미리 돌려 둡니다.
+    # 의도한 넓은 예외 처리: 모델 폴더 없음, GPU 오류 등 어떤 오류든 서버는 켜고 분석 경로만 503
+    except Exception as exc:  # noqa: BLE001
+        EMOTION_STATUS["reason"] = f"감정 모델을 불러오지 못했습니다 ({type(exc).__name__}: {exc})"
+        logger.warning("감정 분석 꺼짐: %s", EMOTION_STATUS["reason"])
+        return
+    EMOTION_STATUS["ready"] = True
+    EMOTION_STATUS["reason"] = ""
+# -------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    prepare_emotion_model()  # 감정 모델은 서버가 켜질 때 한 번만 불러옵니다.
     yield
 
 
@@ -53,6 +98,58 @@ def create_record(payload: RecordCreate):
     finally:
         con.close()
     return {"record_id": record_id, "text": payload.text}
+
+
+@app.post("/api/records/analyze", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
+def analyze_record(payload: RecordCreate):
+    """글을 받아 감정을 분석하고, 성공했을 때만 기록과 감정 결과를 한 번에 저장합니다.
+
+    - 분석에 실패하면 아무것도 저장하지 않습니다(반쪽짜리 기록 없음).
+    - 응답은 POST /api/emotions의 요청과 같은 '감정 결과 양식'입니다.
+    - 예측 감정은 확정 감정이 아닙니다. 추천은 사용자가 확인한 감정으로 합니다.
+    """
+    # 0) 입력 검사를 모델 상태보다 먼저: 모델이 없어도 빈 글은 422로 알려 줍니다.
+    #    (2,000자 초과는 RecordCreate가 이미 422로 막습니다.)
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="감정을 분석할 글이 비어 있습니다.")
+
+    if not EMOTION_STATUS["ready"] or emotion_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="감정 분석을 지금 사용할 수 없습니다. POST /api/records로 기록 후 감정 버튼 4개로 진행하세요.",
+        )
+
+    # 1) 감정 분석 먼저 (아직 DB에 아무것도 쓰지 않음)
+    try:
+        result = emotion_service.analyze_text(payload.text, record_id=None)
+    except ValueError as exc:  # 빈 글, 너무 긴 글 등 입력 문제
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # 모델 실행 중 오류
+        logger.exception("감정 분석 실패")
+        raise HTTPException(status_code=503, detail="감정 분석 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
+
+    # 2) 결과 양식 검사: /api/emotions와 같은 규칙(schemas.EmotionResult)으로 확인
+    try:
+        checked = EmotionResult(**{**result, "record_id": 1, "text": payload.text})  # record_id는 저장 후 채움
+    except (ValidationError, TypeError) as exc:
+        logger.error("감정 결과 양식 오류: %s", exc)
+        raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
+
+    # 3) 기록과 감정 결과를 한 번에 저장 (/api/emotions와 같은 칸에 저장)
+    con = connect()
+    try:
+        with con:
+            cursor = con.execute(
+                """INSERT INTO records (text, predicted_emotion, confidence, probs_json)
+                   VALUES (?, ?, ?, ?)""",
+                (checked.text, checked.emotion, checked.confidence,
+                 json.dumps(checked.probs, ensure_ascii=False)),
+            )
+            record_id = cursor.lastrowid
+    finally:
+        con.close()
+
+    return checked.model_copy(update={"record_id": record_id})
 
 
 @app.post("/api/emotions", tags=["감정 인식 연동"])
