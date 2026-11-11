@@ -64,7 +64,7 @@
   "text":"오늘 좀 지쳤어",
   "probs":{"좋음":0.10,"무난함":0.15,"가라앉음":0.62,"예민함":0.13},
   "emotion":"가라앉음",
-  "confidence":"중간"
+  "confidence":"높음"
 }
 ```
 
@@ -205,6 +205,43 @@ python -m uvicorn app.main:app --reload
 - `MOODWAVE_RECOMMEND_SCOPE=DEAM`: 기본 시연·추천 후보 범위. `ALL`: DEAM + PMEmo 내부 테스트 후보 범위.
 - `song_scores.csv` 및 원본 음원은 **GitHub 저장소에 포함되어 있지 않습니다**. 점수표를 팀에 전달할 수 있는 라이선스/배포 조건을 확인하거나 각자 자료를 추출해야 합니다.
 - 인증·외부 배포 및 파일/원본 녹음 삭제 정책은 아직 개발용입니다.
+
+### AI 감정 인식 모델을 함께 실행하는 경우
+
+기존 FastAPI 서버만 사용할 때는 AI 패키지가 없어도 됩니다.
+
+실제 텍스트 감정 분석 기능을 사용하려면 Python 3.11 이상 환경에서
+PyTorch(torch), Transformers 및 감정 모델 파일을 준비해야 합니다.
+
+**1. AI 패키지 설치**
+
+backend 폴더에서 실행:
+
+```powershell
+python -m pip install -r ..\ai\requirements.txt
+```
+
+GPU용 PyTorch는 사용 중인 GPU 및 CUDA 환경에 맞게 설치해야 합니다.
+
+**2. 감정 모델 폴더 지정**
+
+```powershell
+$env:MOODWAVE_MODEL_DIR="C:\work\moodwave_data\models\klue-bert-base-sentiment"
+```
+
+모델 파일 경로는 실제 저장 위치에 맞게 변경합니다.
+
+**3. FastAPI 실행**
+
+```powershell
+python -m uvicorn app.main:app --reload
+```
+
+**4. 실행 결과**
+
+- 모델 정상 로딩: `POST /api/records/analyze` 사용 가능
+- 모델 또는 AI 패키지 없음: 분석 API만 HTTP 503 반환
+- 기존 기록·음악 추천·LP 조회 API는 계속 사용 가능
 
 ## 6. 통합 테스트 순서와 완료 기준
 
