@@ -108,6 +108,11 @@ def analyze_record(payload: RecordCreate):
     - 응답은 POST /api/emotions의 요청과 같은 '감정 결과 양식'입니다.
     - 예측 감정은 확정 감정이 아닙니다. 추천은 사용자가 확인한 감정으로 합니다.
     """
+    # 0) 입력 검사를 모델 상태보다 먼저: 모델이 없어도 빈 글은 422로 알려 줍니다.
+    #    (2,000자 초과는 RecordCreate가 이미 422로 막습니다.)
+    if not payload.text.strip():
+        raise HTTPException(status_code=422, detail="감정을 분석할 글이 비어 있습니다.")
+
     if not EMOTION_STATUS["ready"] or emotion_service is None:
         raise HTTPException(
             status_code=503,

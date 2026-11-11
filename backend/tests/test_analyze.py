@@ -108,6 +108,23 @@ def test_package_missing_returns_503(monkeypatch):
         assert client.post("/api/records/analyze", json={"text": "테스트"}).status_code == 503
 
 
+@pytest.mark.parametrize("text", ["", "   "])
+def test_empty_text_returns_422_even_without_model(monkeypatch, text):
+    """모델·패키지가 없어도 빈 글은 503이 아니라 422 (입력 검사가 먼저)."""
+    monkeypatch.setattr(main, "emotion_service", None)
+    with TestClient(main.app) as client:
+        before = count_records()
+        assert client.post("/api/records/analyze", json={"text": text}).status_code == 422
+        assert count_records() == before
+
+
+def test_too_long_text_returns_422_even_without_model(monkeypatch):
+    """2,000자 초과도 모델 상태와 상관없이 422."""
+    monkeypatch.setattr(main, "emotion_service", None)
+    with TestClient(main.app) as client:
+        assert client.post("/api/records/analyze", json={"text": "가" * 2001}).status_code == 422
+
+
 def test_analyze_error_returns_503_and_saves_nothing(monkeypatch):
     """모델 실행 중 오류: 아무것도 저장하지 않음."""
     monkeypatch.setattr(main, "emotion_service",
