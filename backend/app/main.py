@@ -28,7 +28,8 @@ if str(REPO_ROOT) not in sys.path:
 try:
     # torch·transformers가 없는 컴퓨터에서는 여기서 실패합니다. 실패해도 서버는 켜집니다.
     from ai.emotion import service as emotion_service
-except Exception as exc:  # ImportError뿐 아니라 torch 내부 오류(OSError 등)도 함께 잡습니다.
+# 의도한 넓은 예외 처리: torch·모델 패키지에서 어떤 오류가 나도 서버는 켜져야 합니다.
+except Exception as exc:  # noqa: BLE001
     emotion_service = None
     _EMOTION_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 else:
@@ -47,7 +48,8 @@ def prepare_emotion_model() -> None:
         return
     try:
         emotion_service.warm_up()  # 모델을 한 번만 읽고 첫 예측을 미리 돌려 둡니다.
-    except Exception as exc:  # 모델 폴더 없음, GPU 오류 등
+    # 의도한 넓은 예외 처리: 모델 폴더 없음, GPU 오류 등 어떤 오류든 서버는 켜고 분석 경로만 503
+    except Exception as exc:  # noqa: BLE001
         EMOTION_STATUS["reason"] = f"감정 모델을 불러오지 못했습니다 ({type(exc).__name__}: {exc})"
         logger.warning("감정 분석 꺼짐: %s", EMOTION_STATUS["reason"])
         return

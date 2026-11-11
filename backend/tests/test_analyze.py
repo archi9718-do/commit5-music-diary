@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main
+from app import main
 from app.db import connect
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_song_scores.csv"
