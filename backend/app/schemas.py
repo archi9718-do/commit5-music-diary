@@ -46,3 +46,10 @@ class Song(BaseModel):
 
 class RecommendationResponse(BaseModel):
     songs: list[Song] = Field(min_length=3, max_length=3)
+
+
+class SongFeedbackRequest(BaseModel):
+    """음악에 대한 좋아요·건너뛰기 요청을 검증합니다."""
+
+    reaction: Literal["like", "skip"]
+

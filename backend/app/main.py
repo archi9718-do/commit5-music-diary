@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from .db import connect, init_db
+from .feedback.router import router as feedback_router
 from .recommender import ScoreDataError, recommend_three
 from .schemas import (
     EmotionResult,
@@ -71,13 +72,13 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
+app.include_router(feedback_router)
 # 로컬 React(Vite/CRA 등) 개발 서버만 허용한 설정입니다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST","PUT"],
     allow_headers=["Content-Type"],
 )
 
