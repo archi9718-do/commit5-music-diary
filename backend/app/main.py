@@ -5,16 +5,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
-from .db import connect, init_db
+from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
 from .recommender import ScoreDataError, recommend_three
 from .schemas import (
     EmotionResult,
     RecommendationRequest,
     RecommendationResponse,
     RecordCreate,
+    SongFeedback,
+    SongFeedbackUpdate,
 )
 
 logger = logging.getLogger("moodwave")
@@ -77,7 +80,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Content-Type"],
 )
 
@@ -89,12 +92,14 @@ def health():
 
 @app.post("/api/records", status_code=201, tags=["기록"])
 def create_record(payload: RecordCreate):
-    """먼저 기록 ID를 발급합니다. 이후 상현의 분석 JSON에 이 ID를 포함합니다."""
+    """먼저 기록 ID를 발급합니다. 이후 상현의 분석 JSON에 이 ID를 포함합니다.
+
+    하루 1건 규칙: 같은 날 다시 부르면 새 ID 대신 오늘 기록을 덮어쓰고 같은 ID를 돌려줍니다.
+    """
     con = connect()
     try:
         with con:
-            cursor = con.execute("INSERT INTO records (text) VALUES (?)", (payload.text,))
-            record_id = cursor.lastrowid
+            record_id = save_today_record(con, get_demo_user_id(con), payload.text)
     finally:
         con.close()
     return {"record_id": record_id, "text": payload.text}
@@ -139,13 +144,12 @@ def analyze_record(payload: RecordCreate):
     con = connect()
     try:
         with con:
-            cursor = con.execute(
-                """INSERT INTO records (text, predicted_emotion, confidence, probs_json)
-                   VALUES (?, ?, ?, ?)""",
-                (checked.text, checked.emotion, checked.confidence,
-                 json.dumps(checked.probs, ensure_ascii=False)),
+            record_id = save_today_record(
+                con, get_demo_user_id(con), checked.text,
+                emotion_pred=checked.emotion,
+                confidence_level=checked.confidence,
+                emotion_probs=checked.probs,
             )
-            record_id = cursor.lastrowid
     finally:
         con.close()
 
@@ -159,9 +163,9 @@ def save_emotion_result(payload: EmotionResult):
     try:
         with con:
             cursor = con.execute(
-                """UPDATE records
-                   SET text = ?, predicted_emotion = ?, confidence = ?, probs_json = ?
-                   WHERE id = ?""",
+                """UPDATE tb_record
+                   SET record_text = ?, emotion_pred = ?, confidence_level = ?, emotion_probs = ?
+                   WHERE record_id = ?""",
                 (payload.text, payload.emotion, payload.confidence,
                  json.dumps(payload.probs, ensure_ascii=False), payload.record_id),
             )
@@ -183,18 +187,21 @@ def create_recommendations(payload: RecommendationRequest):
     con = connect()
     try:
         with con:
+            # 새 추천 = 새 3곡 흐름 시작이므로 흐름 종료 일시도 비웁니다.
             cursor = con.execute(
-                "UPDATE records SET confirmed_emotion = ? WHERE id = ?",
+                "UPDATE tb_record SET emotion_final = ?, flow_ended_at = NULL WHERE record_id = ?",
                 (payload.confirmed_emotion, payload.record_id),
             )
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="record_id가 없습니다.")
-            con.execute("DELETE FROM recommendations WHERE record_id = ?", (payload.record_id,))
+            con.execute("DELETE FROM tb_record_song WHERE record_id = ?", (payload.record_id,))
+            for song in songs:
+                ensure_song(con, song.song_id, song.brightness, song.energy)
             con.executemany(
-                """INSERT INTO recommendations
-                   (record_id, position, song_id, brightness, energy, step)
+                """INSERT INTO tb_record_song
+                   (record_id, recommend_order, song_id, step, valence_at_rec, arousal_at_rec)
                    VALUES (?, ?, ?, ?, ?, ?)""",
-                [(payload.record_id, i, song.song_id, song.brightness, song.energy, song.step)
+                [(payload.record_id, i, song.song_id, song.step, song.brightness, song.energy)
                  for i, song in enumerate(songs, start=1)],
             )
     finally:
@@ -204,24 +211,106 @@ def create_recommendations(payload: RecommendationRequest):
 
 @app.get("/api/records/{record_id}/lp", tags=["오늘의 판"])
 def get_today_lp(record_id: int):
-    """현재는 추천곡 3개를 기록한 '임시 판'입니다. 실제 새기기 규칙은 후속 개발합니다."""
+    """오늘의 판: 기록과 추천곡 3개, 곡별 반응을 함께 돌려줍니다.
+
+    기존 응답 키(record_id, text, confirmed_emotion, songs[].song_id/brightness/energy/step)는 그대로이고,
+    곡마다 recommend_order, title, artist, is_liked, is_skipped, is_completed, is_engraved가 추가됐습니다.
+    """
     con = connect()
     try:
         record = con.execute(
-            "SELECT id, text, confirmed_emotion FROM records WHERE id = ?", (record_id,)
+            "SELECT record_id, record_text, emotion_final FROM tb_record WHERE record_id = ?", (record_id,)
         ).fetchone()
         if record is None:
             raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
-        songs = con.execute(
-            """SELECT song_id, brightness, energy, step FROM recommendations
-               WHERE record_id = ? ORDER BY position""", (record_id,)
+        rows = con.execute(
+            """SELECT rs.recommend_order, rs.song_id, s.title, s.artist,
+                      rs.valence_at_rec AS brightness, rs.arousal_at_rec AS energy, rs.step,
+                      rs.is_liked, rs.is_skipped, rs.is_completed, rs.is_engraved
+               FROM tb_record_song rs JOIN tb_song s ON s.song_id = rs.song_id
+               WHERE rs.record_id = ? ORDER BY rs.recommend_order""", (record_id,)
         ).fetchall()
     finally:
         con.close()
+    flags = ("is_liked", "is_skipped", "is_completed", "is_engraved")
+    songs = [{**dict(row), **{flag: bool(row[flag]) for flag in flags}} for row in rows]
     return {
         "record_id": record_id,
-        "text": record["text"],
-        "confirmed_emotion": record["confirmed_emotion"],
-        "songs": [dict(song) for song in songs],
-        "note": "개발용 임시 판: 좋아요·완청·감상 후 기분에 따른 실제 새기기 규칙은 미구현",
+        "text": record["record_text"],
+        "confirmed_emotion": record["emotion_final"],
+        "songs": songs,
+        "note": "LP 새김은 POST /api/records/{record_id}/engrave 로 합니다(좋아요 곡만).",
     }
+
+
+def _feedback_row(con, record_id: int, recommend_order: int):
+    return con.execute(
+        """SELECT record_id, recommend_order, song_id, is_liked, is_skipped, is_completed, is_engraved
+           FROM tb_record_song WHERE record_id = ? AND recommend_order = ?""",
+        (record_id, recommend_order),
+    ).fetchone()
+
+
+@app.patch(
+    "/api/records/{record_id}/songs/{recommend_order}",
+    response_model=SongFeedback,
+    tags=["추천곡 반응"],
+)
+def update_song_feedback(
+    payload: SongFeedbackUpdate,
+    record_id: int = PathParam(gt=0),
+    recommend_order: int = PathParam(ge=1, le=3, description="추천 순서 1~3 (기존 position)"),
+):
+    """추천곡 1곡의 좋아요·건너뛰기·완청 여부를 저장합니다. 보낸 항목만 바꿉니다.
+
+    - 좋아요를 취소하면 LP 새김도 함께 취소됩니다(LP에는 좋아요 곡만 새김).
+    - 건너뛴 곡을 완청으로, 완청한 곡을 건너뛰기로 동시에 표시할 수는 없습니다(409).
+    """
+    con = connect()
+    try:
+        with con:
+            row = _feedback_row(con, record_id, recommend_order)
+            if row is None:
+                raise HTTPException(status_code=404, detail="해당 기록의 추천곡을 찾을 수 없습니다.")
+            liked = row["is_liked"] if payload.is_liked is None else int(payload.is_liked)
+            skipped = row["is_skipped"] if payload.is_skipped is None else int(payload.is_skipped)
+            completed = row["is_completed"] if payload.is_completed is None else int(payload.is_completed)
+            if skipped and completed:
+                raise HTTPException(status_code=409, detail="건너뛴 곡은 완청으로 기록할 수 없습니다.")
+            engraved = row["is_engraved"] if liked else 0
+            con.execute(
+                """UPDATE tb_record_song
+                   SET is_liked = ?, is_skipped = ?, is_completed = ?, is_engraved = ?
+                   WHERE record_id = ? AND recommend_order = ?""",
+                (liked, skipped, completed, engraved, record_id, recommend_order),
+            )
+            updated = _feedback_row(con, record_id, recommend_order)
+    finally:
+        con.close()
+    return SongFeedback(**dict(updated))
+
+
+@app.post(
+    "/api/records/{record_id}/engrave",
+    response_model=list[SongFeedback],
+    tags=["추천곡 반응"],
+)
+def engrave_liked_songs(record_id: int = PathParam(gt=0)):
+    """그날의 판에 새기기: 좋아요를 누른 곡만 새깁니다(팀 결정 5). 여러 번 불러도 결과가 같습니다."""
+    con = connect()
+    try:
+        with con:
+            exists = con.execute("SELECT 1 FROM tb_record WHERE record_id = ?", (record_id,)).fetchone()
+            if exists is None:
+                raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
+            con.execute(
+                "UPDATE tb_record_song SET is_engraved = is_liked WHERE record_id = ?", (record_id,)
+            )
+            rows = con.execute(
+                """SELECT record_id, recommend_order, song_id, is_liked, is_skipped, is_completed, is_engraved
+                   FROM tb_record_song WHERE record_id = ? ORDER BY recommend_order""",
+                (record_id,),
+            ).fetchall()
+    finally:
+        con.close()
+    return [SongFeedback(**dict(row)) for row in rows]

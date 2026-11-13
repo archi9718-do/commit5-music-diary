@@ -46,3 +46,26 @@ class Song(BaseModel):
 
 class RecommendationResponse(BaseModel):
     songs: list[Song] = Field(min_length=3, max_length=3)
+
+
+class SongFeedbackUpdate(BaseModel):
+    """추천곡 1곡에 대한 반응. 보낸 항목만 바꿉니다(보내지 않은 항목은 그대로)."""
+    is_liked: bool | None = None
+    is_skipped: bool | None = None
+    is_completed: bool | None = None
+
+    @model_validator(mode="after")
+    def check_not_empty(self):
+        if self.is_liked is None and self.is_skipped is None and self.is_completed is None:
+            raise ValueError("is_liked, is_skipped, is_completed 중 하나 이상을 보내야 합니다")
+        return self
+
+
+class SongFeedback(BaseModel):
+    record_id: int
+    recommend_order: int = Field(ge=1, le=3)
+    song_id: str
+    is_liked: bool
+    is_skipped: bool
+    is_completed: bool
+    is_engraved: bool
