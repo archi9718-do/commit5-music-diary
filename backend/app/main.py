@@ -264,6 +264,7 @@ def update_song_feedback(
     """추천곡 1곡의 좋아요·건너뛰기·완청 여부를 저장합니다. 보낸 항목만 바꿉니다.
 
     - 좋아요를 취소하면 LP 새김도 함께 취소됩니다(LP에는 좋아요 곡만 새김).
+    - 좋아요와 건너뛰기는 동시에 표시할 수 없습니다(409).
     - 건너뛴 곡을 완청으로, 완청한 곡을 건너뛰기로 동시에 표시할 수는 없습니다(409).
     """
     con = connect()
@@ -275,6 +276,8 @@ def update_song_feedback(
             liked = row["is_liked"] if payload.is_liked is None else int(payload.is_liked)
             skipped = row["is_skipped"] if payload.is_skipped is None else int(payload.is_skipped)
             completed = row["is_completed"] if payload.is_completed is None else int(payload.is_completed)
+            if liked and skipped:
+                raise HTTPException(status_code=409, detail="좋아요한 곡은 건너뛰기로 기록할 수 없습니다. 좋아요를 먼저 취소하세요.")
             if skipped and completed:
                 raise HTTPException(status_code=409, detail="건너뛴 곡은 완청으로 기록할 수 없습니다.")
             engraved = row["is_engraved"] if liked else 0

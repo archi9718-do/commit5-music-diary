@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS tb_record_song (
   created_at      TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (record_id, recommend_order),
   UNIQUE (record_id, song_id),
+  CHECK (NOT (is_liked = 1 AND is_skipped = 1)),                         -- 좋아요와 건너뛰기는 동시에 1 불가
   CHECK (NOT (is_skipped = 1 AND is_completed = 1)),
   CHECK (is_engraved = 0 OR is_liked = 1)                               -- 좋아요 안 한 곡은 새길 수 없음
 );

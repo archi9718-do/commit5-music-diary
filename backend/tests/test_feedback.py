@@ -34,19 +34,20 @@ def test_like_skip_complete_and_engrave_only_liked_songs():
     with TestClient(main.app) as client:
         record_id = make_record_with_songs(client)
 
-        # 1번 곡: 좋아요 누른 뒤 건너뜀 / 2·3번 곡: 끝까지 들음
+        # 1번 곡: 좋아요 / 2번 곡: 끝까지 들음 / 3번 곡: 건너뜀
         res = feedback(client, record_id, 1, is_liked=True)
         assert res.status_code == 200
         assert res.json()["is_liked"] is True
-        res = feedback(client, record_id, 1, is_skipped=True)
-        assert res.json()["is_skipped"] is True
+        res = feedback(client, record_id, 1, is_completed=True)
+        assert res.json()["is_completed"] is True
         assert res.json()["is_liked"] is True  # 보내지 않은 좋아요 값은 그대로 유지
         assert feedback(client, record_id, 2, is_completed=True).status_code == 200
-        assert feedback(client, record_id, 3, is_completed=True).status_code == 200
+        assert feedback(client, record_id, 3, is_skipped=True).status_code == 200
 
         lp = client.get(f"/api/records/{record_id}/lp").json()
         assert [s["recommend_order"] for s in lp["songs"]] == [1, 2, 3]
-        assert [s["is_completed"] for s in lp["songs"]] == [False, True, True]
+        assert [s["is_completed"] for s in lp["songs"]] == [True, True, False]
+        assert [s["is_skipped"] for s in lp["songs"]] == [False, False, True]
         assert {"song_id", "brightness", "energy", "step", "title", "artist"} <= set(lp["songs"][0])
 
         # LP 새김: 좋아요 곡(1번)만, 여러 번 불러도 같은 결과
@@ -67,6 +68,16 @@ def test_feedback_errors():
         assert feedback(client, record_id, 4, is_liked=True).status_code == 422  # 순서는 1~3
         assert feedback(client, record_id, 1).status_code == 422  # 아무 항목도 안 보냄
         assert client.post("/api/records/9999/engrave").status_code == 404
+
+        # 좋아요와 건너뛰기는 동시에 표시할 수 없음 (어느 순서로 눌러도, 한 번에 보내도)
+        assert feedback(client, record_id, 1, is_liked=True).status_code == 200
+        assert feedback(client, record_id, 1, is_skipped=True).status_code == 409
+        assert feedback(client, record_id, 3, is_liked=True, is_skipped=True).status_code == 409
+        assert feedback(client, record_id, 1, is_liked=False).status_code == 200
+        res = feedback(client, record_id, 1, is_skipped=True)  # 좋아요 취소 후에는 건너뛰기 가능
+        assert res.status_code == 200
+        assert (res.json()["is_liked"], res.json()["is_skipped"]) == (False, True)
+        assert feedback(client, record_id, 1, is_liked=True).status_code == 409  # 반대 순서도 막음
 
         # 건너뛴 곡을 완청으로 표시할 수 없음
         assert feedback(client, record_id, 2, is_skipped=True).status_code == 200
@@ -117,3 +128,19 @@ def test_recommended_songs_are_registered_in_tb_song():
         con.close()
         assert len(rows) == 3
         assert all(r["dataset"] == "DEAM" and r["original_id"] for r in rows)
+
+
+def test_db_rejects_liked_and_skipped_together():
+    """API를 거치지 않고 DB에 직접 넣어도 좋아요+건너뛰기는 막힙니다(CHECK 제약)."""
+    import sqlite3
+
+    with TestClient(main.app) as client:
+        record_id = make_record_with_songs(client)
+        con = connect()
+        with pytest.raises(sqlite3.IntegrityError):
+            with con:
+                con.execute(
+                    "UPDATE tb_record_song SET is_liked = 1, is_skipped = 1 WHERE record_id = ? AND recommend_order = 1",
+                    (record_id,),
+                )
+        con.close()
