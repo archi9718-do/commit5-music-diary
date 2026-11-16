@@ -137,10 +137,9 @@ def test_db_rejects_liked_and_skipped_together():
     with TestClient(main.app) as client:
         record_id = make_record_with_songs(client)
         con = connect()
-        with pytest.raises(sqlite3.IntegrityError):
-            with con:
-                con.execute(
-                    "UPDATE tb_record_song SET is_liked = 1, is_skipped = 1 WHERE record_id = ? AND recommend_order = 1",
-                    (record_id,),
-                )
+        with pytest.raises(sqlite3.IntegrityError), con:
+            con.execute(
+                "UPDATE tb_record_song SET is_liked = 1, is_skipped = 1 WHERE record_id = ? AND recommend_order = 1",
+                (record_id,),
+            )
         con.close()
