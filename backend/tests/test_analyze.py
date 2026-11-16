@@ -14,7 +14,7 @@ from app.db import connect
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_song_scores.csv"
 
-FAKE_PROBS = {"좋음": 0.02, "무난함": 0.03, "가라앉음": 0.33, "예민함": 0.62}
+FAKE_PROBS = {"좋음": 0.02, "무난함": 0.03, "가라앉음": 0.23, "예민함": 0.72}  # 0.7 이상이라 "높음"
 
 
 class FakeEmotionService:
