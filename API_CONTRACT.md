@@ -209,6 +209,22 @@
 - 모델은 서버가 켜질 때 한 번만 불러옵니다(약 2초). 이후 글 한 줄 분석은 수 ms입니다(상현 GPU 컴퓨터 기준).
 - 패키지나 모델이 없어도 서버와 기존 4개 API, pytest는 정상 동작합니다. 이때 서버 터미널에 `감정 분석 꺼짐: ...` 경고가 한 줄 나옵니다.
 
+### 3.6. 완청·건너뛰기 UI 연동 — db-v5 기준
+
+이 절은 `feature/db-v5`의 `backend/app/main.py`, `backend/app/schemas.py`, `backend/app/schema.sql` 기준입니다. 위 `main` 기준 설명과 달리 이 브랜치에는 `PATCH /api/records/{record_id}/songs/{recommend_order}`가 구현되어 있습니다(`recommend_order`: 1~3). PATCH는 보낸 필드만 바꾸며, 생략한 필드는 기존 값을 유지합니다. SQLite의 `CHECK (NOT (is_skipped = 1 AND is_completed = 1))`와 API 검증에 따라 두 값이 동시에 참이면 `409`입니다.
+
+**MVP 완청 판정:** 플레이어의 `onEnded`에서 완청으로 처리합니다.
+
+| 경계 사례 | 프론트엔드 처리 | 저장 결과 |
+|---|---|---|
+| 이전에 건너뛴 곡을 다시 끝까지 재생 (`onEnded`) | 같은 PATCH 본문에 `{"is_skipped":false,"is_completed":true}`를 함께 전송합니다. `{"is_completed":true}`만 보내면 기존 건너뛰기 값이 남아 `409`입니다. | `is_skipped=false`, `is_completed=true` |
+| 좋아요한 곡에서 건너뛰기 | `409 Conflict` — "좋아요를 먼저 취소하세요". 프론트는 좋아요 상태이면 건너뛰기 PATCH를 전송하지 않습니다. | 기존 좋아요·건너뛰기 상태 유지 |
+| 이미 완청한 곡을 다시 재생하다가 건너뛰기 | 프론트는 해당 곡의 건너뛰기 PATCH를 전송하지 않습니다. 완청을 취소하는 PATCH도 보내지 않습니다. | 기존 `is_completed=true`, `is_skipped=false` 유지 |
+
+**409 응답 처리:** 이 PATCH에서 `409`를 받으면 일반 오류 화면이나 오류 팝업을 띄우지 않고 넘어갑니다. 실패한 변경은 성공으로 반영하지 않고 기존 상태를 유지하며, LP를 다시 조회하여 화면 상태를 서버와 맞춥니다.
+
+**후속 개선안 (MVP 미적용):** 재생바를 끝으로 옮겨 `onEnded`가 발생하는 경우에 대비해, 실제 누적 재생시간이 곡 길이의 90% 이상일 때만 완청으로 인정하는 검증을 검토합니다.
+
 ## 4. 대표 오류 처리
 
 | 상태 코드 | 뜻/대표 원인 | 조치 |

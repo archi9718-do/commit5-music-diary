@@ -48,7 +48,7 @@ def isolated_env(monkeypatch, tmp_path):
 def count_records():
     con = connect()
     try:
-        return con.execute("SELECT COUNT(*) FROM records").fetchone()[0]
+        return con.execute("SELECT COUNT(*) FROM tb_record").fetchone()[0]
     finally:
         con.close()
 
