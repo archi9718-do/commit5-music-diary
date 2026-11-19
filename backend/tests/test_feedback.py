@@ -61,6 +61,23 @@ def test_like_skip_complete_and_engrave_only_liked_songs():
         assert res.json()["is_engraved"] is False
 
 
+def test_engrave_selection_and_record_only():
+    with TestClient(main.app) as client:
+        record_id = make_record_with_songs(client)
+        for order in (1, 2):
+            assert feedback(client, record_id, order, is_liked=True).status_code == 200
+        path = f"/api/records/{record_id}"
+        picked = client.post(f"{path}/engrave", json={"recommend_orders": [2, 3]})
+        assert picked.status_code == 200
+        assert [song["is_engraved"] for song in picked.json()] == [False, True, False]
+
+        saved = client.post(f"{path}/engrave", json={"recommend_orders": []})
+        assert saved.status_code == 200
+        songs = client.get(f"{path}/lp").json()["songs"]
+        assert [song["is_engraved"] for song in songs] == [False, False, False]
+        assert [song["is_liked"] for song in songs] == [True, True, False]
+
+
 def test_feedback_errors():
     with TestClient(main.app) as client:
         record_id = make_record_with_songs(client)

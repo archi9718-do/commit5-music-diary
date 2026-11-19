@@ -53,8 +53,12 @@ export function recommend(mood) {
 export const RESPONSES=["조금 나아졌어요","비슷해요","더 무거워졌어요","잘 모르겠어요"];
 export const canReview = (ids,states)=>ids.filter(id=>states[id]?.completed).length>=2;
 export function nextTrackState(previous={}, action) {
-  if (action==="like") return {...previous,liked:!previous.liked};
-  if (action==="skip") return previous.completed?previous:{...previous,skipped:true};
+  if (action==="like") return previous.liked
+    ? {...previous,liked:false,engraved:false}
+    : {...previous,liked:true,skipped:false};
+  if (action==="skip") return previous.completed
+    ? previous
+    : {...previous,liked:false,skipped:true,engraved:false};
   if (action==="finish") return {...previous,completed:true,skipped:false};
   return previous;
 }
@@ -77,12 +81,15 @@ export function monthlyMood(records) {
 }
 export function monthlyMusic(records) {
   const score = {};
+  const songs = new Map(records.flatMap(record=>(record.queue??[]).map(track=>[track.id,track])));
   for (const r of records) for(const [id,t] of Object.entries(r.tracks??{})) {
     if(!t.liked&&!t.completed&&!t.engraved) continue;
     const a=score[id]??{liked:0,completed:0,engraved:0};
     score[id]={liked:a.liked+Number(!!t.liked),completed:a.completed+Number(!!t.completed),engraved:a.engraved+Number(!!t.engraved)};
   }
-  return Object.entries(score).filter(([id])=>getTrack(id)).map(([id,a])=>({...getTrack(id),...a})).sort((a,b)=>b.completed-a.completed||b.liked-a.liked);
+  return Object.entries(score).map(([id,a])=>({track:songs.get(id)??getTrack(id),stats:a}))
+    .filter(({track})=>track).map(({track,stats})=>({...track,...stats}))
+    .sort((a,b)=>b.completed-a.completed||b.liked-a.liked);
 }
 export function makeRecord({day,input,mood,mode,response,tracks,queue,engrave}) {
   const ids=queue.map(t=>t.id);
