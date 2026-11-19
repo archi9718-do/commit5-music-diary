@@ -72,7 +72,8 @@ function Player({queue,index,onIndex,onAction,onReview}){
 }
 function Voice({onAnalyze,onFail,onBack}){
   const stream=useRef(null),rec=useRef(null),timer=useRef(null),permission=useRef(null),alive=useRef(true);
-  const [status,setStatus]=useState("idle"),[seconds,setSeconds]=useState(0),[words,setWords]=useState(""),[busy,setBusy]=useState(false);
+  const [status,setStatus]=useState("idle"),[seconds,setSeconds]=useState(0),[busy,setBusy]=useState(false);
+  const chunks=useRef([]);
   const stopStream=()=>{stream.current?.getTracks().forEach(t=>t.stop());stream.current=null;};
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;clearInterval(timer.current);if(rec.current?.state==="recording")rec.current.stop();stopStream();};},[]);
   const stop=()=>{if(rec.current?.state==="recording")rec.current.stop();};
@@ -86,8 +87,9 @@ function Voice({onAnalyze,onFail,onBack}){
       s=await permission.current;
       if(!alive.current){s.getTracks().forEach(t=>t.stop());return;}
       stream.current=s;
-      const recorder=new MediaRecorder(s);rec.current=recorder;
-      // No dataavailable consumer: audio is intentionally discarded, never stored or sent.
+      const recorder=new MediaRecorder(s);rec.current=recorder;chunks.current=[];
+      // 녹음은 메모리에만 모았다가 받아쓰기 요청 한 번에 보냄. 브라우저·서버 어디에도 파일로 남기지 않음
+      recorder.ondataavailable=e=>{if(e.data.size)chunks.current.push(e.data);};
       recorder.onstop=()=>{clearInterval(timer.current);stopStream();rec.current=null;if(alive.current)setStatus("done");};
       recorder.onerror=()=>{clearInterval(timer.current);stopStream();if(alive.current)onFail("녹음을 마치지 못했어요. 글이나 직접 선택으로 계속할 수 있어요.");};
       recorder.start();setStatus("recording");
@@ -96,9 +98,8 @@ function Voice({onAnalyze,onFail,onBack}){
     finally{if(alive.current)setBusy(false);}
   };
   return <><Heading title="음성 녹음" desc={`최대 ${MAX_RECORDING_SECONDS}초 동안 말해볼 수 있어요.`}/><div className={`mic-stage ${status==="recording"?"live":""}`}><Icon name="mic" size={38}/><strong aria-live="polite">0:{String(seconds).padStart(2,"0")}</strong><span>{status==="recording"?"녹음 중":status==="done"?"녹음 종료 · 원본 미저장":"녹음 대기"}</span></div>
-  {status==="done"&&<label className="field">말한 내용을 글로 남기고 싶다면<textarea maxLength={300} value={words} onChange={e=>setWords(e.target.value)} rows={3} placeholder="비워두면 감정을 직접 고를 수 있어요."/></label>}
-  <Notice>마이크 녹음만 시연해요. 음성 분석·자동 받아쓰기는 연결하지 않았어요. 원본 음성은 저장하거나 전송하지 않아요.</Notice>
-  <div className="actions">{status==="recording"?<Btn onClick={stop}>녹음 종료</Btn>:status==="done"?<><Btn onClick={()=>onAnalyze(words)}>기록 완료</Btn><Btn variant="secondary" disabled={busy} onClick={start}>다시 녹음하기</Btn></>:<Btn disabled={busy} onClick={start}>{busy?"권한 확인 중":"녹음 시작"}</Btn>}<button className="link" onClick={onBack}>글로 기록하기</button></div></>;
+  <Notice>녹음은 받아쓰기를 위해 서버로 한 번 보내요. 서버는 받아쓴 글만 저장하고 원본 음성은 저장하지 않아요.</Notice>
+  <div className="actions">{status==="recording"?<Btn onClick={stop}>녹음 종료</Btn>:status==="done"?<><Btn onClick={()=>{const blob=new Blob(chunks.current,{type:chunks.current[0]?.type||"audio/webm"});chunks.current=[];onAnalyze(blob);}}>기록 완료</Btn><Btn variant="secondary" disabled={busy} onClick={start}>다시 녹음하기</Btn></>:<Btn disabled={busy} onClick={start}>{busy?"권한 확인 중":"녹음 시작"}</Btn>}<button className="link" onClick={onBack}>글로 기록하기</button></div></>;
 }
 
 export default function App(){
@@ -248,6 +249,22 @@ export default function App(){
   }
   function manual(){if(classify(draft.input).kind==="risk"){go("risk");return;}setPick(null);go("manual");}
   function failed(text){setMessage(text);go("failure");}
+  // 녹음 → 서버 받아쓰기 + 감정 분석 + 저장 (POST /records/voice). 응답 형식은 /records/analyze와 같음
+  function analyzeVoice(blob){
+    if(pending.current||!confirmReplacement())return;
+    setPick(null);
+    go("loading");
+    return run(async()=>{
+      const data=await request("/records/voice","POST",blob);
+      // ponytail: 위험 문장 검사가 서버 저장 뒤에 일어남. 글 경로처럼 앞에서 막으려면 받아쓰기 전용 API 필요
+      if(classify(data.text).kind==="risk"){go("risk",false);return;}
+      const output=analysisResult(data);
+      setDraft({...fresh(),input:data.text,mode:"voice",replacing:true,recordId:data.record_id});
+      setResult(output);
+      setFlash(`받아쓴 글: ${data.text}`);
+      go(output.kind,false);
+    },failed);
+  }
   function selectTrack(i){setIndex(i);go("player");}
   function review(){go("react");}
   function prepareLP(){
@@ -310,8 +327,8 @@ export default function App(){
       case "start":return <><div className="start-kicker"><span/> MOOD JOURNAL</div><Heading title="오늘의 마음을 음악으로" desc="하루를 짧게 기록하고, 어울리는 음악을 LP판에 남겨보세요."/><LP/><div className="actions"><Btn onClick={preferred}>기록 시작 <Icon name="arrow" size={17}/></Btn><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 살펴보기</Btn></div><div className="demo-legal"><button className="link" onClick={()=>go("login")}>로그인 화면 보기</button><span>·</span><button className="link" onClick={()=>go("signup")}>회원가입 화면 보기</button></div><Notice>테스트 계정으로 기록을 저장하는 시제품이에요.</Notice></>;
       case "login":case "signup":return <><Heading title={PAGES[page][0]} desc="화면 미리보기 · 실제 계정 인증은 연결하지 않았어요."/><div className="surface auth-demo"><label className="field">아이디<input value="moodwave-demo" readOnly/></label><label className="field">비밀번호<input value="demo-only" type="password" readOnly/></label><Notice>예시 정보만 표시해요. 실제 아이디나 비밀번호를 입력하지 않아요.</Notice></div><div className="actions"><Btn onClick={preferred}>시연 모드로 계속하기</Btn><Btn variant="secondary" onClick={()=>go(page==="login"?"signup":"login")}>{page==="login"?"회원가입 화면 보기":"로그인 화면 보기"}</Btn></div></>;
       case "record":return <><Heading title="오늘의 기록" desc="오늘의 마음을 한 문장으로 남겨도 좋아요."/><form onSubmit={e=>{e.preventDefault();if(draft.input.trim())analyze(draft.input,"text");}}><div className="surface"><label className="field">오늘 있었던 일<textarea value={draft.input} maxLength={300} rows={6} onChange={e=>patch({input:e.target.value,mode:"text",recordId:null,demo:false})} placeholder="오늘은 어떤 기분이었나요?"/></label><div className="field-meta"><span>기록을 완료하면 입력한 글이 서버로 전송돼요.</span><span>{draft.input.length} / 300</span></div></div><div className="actions"><button className="btn primary" disabled={!draft.input.trim()} type="submit">기록 완료 <Icon name="arrow" size={16}/></button><Btn variant="secondary" onClick={optionalVoice}><Icon name="mic" size={17}/> 음성으로 기록</Btn><button type="button" className="link" onClick={manual}>감정 직접 선택</button></div></form></>;
-      case "consent":return <><Heading title="음성 녹음 동의" desc="녹음을 시작하기 전에 확인해주세요."/><div className="surface consent"><Icon name="shield" size={25}/><h2>원본 음성은 저장하지 않아요</h2><p>이 시제품에서는 마이크 동작만 확인해요. 녹음 데이터는 서버로 보내지 않고, 녹음을 종료하거나 화면에서 나가면 마이크를 닫아요. 음성 감정 분석과 자동 받아쓰기는 미연결 상태예요.</p><label className="checkline"><input type="checkbox" checked={agreed} onChange={e=>setAgreed(e.target.checked)}/> 안내를 읽고 마이크 사용에 동의해요.</label></div><div className="actions"><Btn disabled={!agreed} onClick={()=>go("voice")}>녹음 화면으로</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 기록하기</Btn></div></>;
-      case "voice":return <Voice onAnalyze={words=>analyze(words,"voice")} onFail={failed} onBack={()=>go("record")}/>;
+      case "consent":return <><Heading title="음성 녹음 동의" desc="녹음을 시작하기 전에 확인해주세요."/><div className="surface consent"><Icon name="shield" size={25}/><h2>원본 음성은 저장하지 않아요</h2><p>녹음은 자동 받아쓰기를 위해 서버로 한 번 보내고, 서버는 받아쓴 글만 저장해요. 녹음을 종료하거나 화면에서 나가면 마이크를 닫아요.</p><label className="checkline"><input type="checkbox" checked={agreed} onChange={e=>setAgreed(e.target.checked)}/> 안내를 읽고 마이크 사용에 동의해요.</label></div><div className="actions"><Btn disabled={!agreed} onClick={()=>go("voice")}>녹음 화면으로</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 기록하기</Btn></div></>;
+      case "voice":return <Voice onAnalyze={analyzeVoice} onFail={failed} onBack={()=>go("record")}/>;
       case "loading":return <><Heading title="감정 분석 중" desc="오늘의 마음을 살펴보고 있어요."/><LP playing/><div className="dots" role="status" aria-label="분석 중"><i/><i/><i/></div><Notice>서버에서 입력한 글을 분석하고 있어요.</Notice></>;
       case "high":return <><Heading title={PAGES.high[0]}/><LP/><div className="analysis-result"><small>시제품이 짐작한 감정</small><strong>{moodInfo(result.candidates[0]).label}</strong></div><div className="actions"><Btn onClick={()=>accept(result.candidates[0]??"steady")}>맞아요</Btn><Btn variant="secondary" onClick={manual}>다른 감정이에요</Btn></div></>;
       case "medium":return <><Heading title={PAGES.medium[0]} desc="기록에서 가까운 두 가지 감정을 골랐어요."/><LP/><MoodSelect ids={result.candidates.length?result.candidates:["steady","low"]} stack onPick={accept}/><div className="actions"><button className="link" onClick={manual}>다른 감정 선택</button></div></>;
