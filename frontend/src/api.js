@@ -6,7 +6,11 @@ export async function request(path, method = "GET", body) {
   const response = await fetch(`${base}/api${path}`, {
     method,
     signal: AbortSignal.timeout(30000),
-    ...(body === undefined ? {} : {
+    // 녹음(Blob)은 JSON 대신 본문 그대로 보냄 (POST /records/voice는 raw body)
+    ...(body === undefined ? {} : body instanceof Blob ? {
+      headers: {"Content-Type": body.type || "application/octet-stream"},
+      body,
+    } : {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body),
     }),
