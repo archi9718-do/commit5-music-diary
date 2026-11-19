@@ -2,7 +2,7 @@
 # backend/requirements.txt(서버 기본 패키지)와 따로 관리합니다.
 # 이 패키지가 없어도 서버는 켜지고, POST /api/records/analyze만 503을 돌려줍니다.
 #
-# 파이썬 버전: 3.11 이상 필요 (팀 기준).
+# 파이썬 버전: 3.12 이상 필요 (av 19.0.2가 3.12 이상만 지원. 글 감정만 쓰면 3.11도 가능).
 #   실제로 확인한 버전: 3.14.7 (상현 GPU 컴퓨터, torch 2.15.0+cu132, transformers 5.22.2)
 #   버전 확인: python --version
 #
