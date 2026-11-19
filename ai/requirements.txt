@@ -18,3 +18,4 @@
 # 환경 변수 MOODWAVE_MODEL_DIR로 알려 줍니다.
 torch==2.15.0
 transformers==5.22.2
+av==19.0.2  # 녹음(webm·wav 등)을 16kHz로 바꿈. ffmpeg가 안에 들어 있어 따로 설치 불필요
