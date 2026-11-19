@@ -4,10 +4,11 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
 from .recommender import ScoreDataError, recommend_three
@@ -38,26 +39,45 @@ except Exception as exc:  # noqa: BLE001
 else:
     _EMOTION_IMPORT_ERROR = ""
 
-# 감정 분석을 쓸 수 있는지 기록해 두는 상태값 (서버가 켜질 때 정해집니다)
+try:
+    # 받아쓰기(Whisper)도 같은 방식: av·torch가 없으면 서버는 켜지고 녹음 경로만 503
+    from ai.stt import service as stt_service
+# 의도한 넓은 예외 처리: av·torch·모델 패키지에서 어떤 오류가 나도 서버는 켜져야 합니다.
+except Exception as exc:  # noqa: BLE001
+    stt_service = None
+    _STT_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+else:
+    _STT_IMPORT_ERROR = ""
+
+# 감정 분석·받아쓰기를 쓸 수 있는지 기록해 두는 상태값 (서버가 켜질 때 정해집니다)
 EMOTION_STATUS = {"ready": False, "reason": "서버 시작 전"}
+STT_STATUS = {"ready": False, "reason": "서버 시작 전"}
+
+
+def _prepare(status: dict, service, import_error: str, label: str) -> None:
+    """모델을 미리 불러옵니다. 실패해도 서버는 켜지고, 그 모델을 쓰는 경로만 503을 돌려줍니다."""
+    status["ready"] = False
+    if service is None:
+        status["reason"] = f"{label} 패키지를 불러오지 못했습니다 ({import_error})"
+        logger.warning("%s 꺼짐: %s", label, status["reason"])
+        return
+    try:
+        service.warm_up()  # 모델을 한 번만 읽고 첫 예측을 미리 돌려 둡니다.
+    # 의도한 넓은 예외 처리: 모델 폴더 없음, GPU 오류 등 어떤 오류든 서버는 켜고 해당 경로만 503
+    except Exception as exc:  # noqa: BLE001
+        status["reason"] = f"{label} 모델을 불러오지 못했습니다 ({type(exc).__name__}: {exc})"
+        logger.warning("%s 꺼짐: %s", label, status["reason"])
+        return
+    status["ready"] = True
+    status["reason"] = ""
 
 
 def prepare_emotion_model() -> None:
-    """감정 모델을 미리 불러옵니다. 실패해도 서버는 켜지고, 분석 경로만 503을 돌려줍니다."""
-    EMOTION_STATUS["ready"] = False
-    if emotion_service is None:
-        EMOTION_STATUS["reason"] = f"감정 분석 패키지를 불러오지 못했습니다 ({_EMOTION_IMPORT_ERROR})"
-        logger.warning("감정 분석 꺼짐: %s", EMOTION_STATUS["reason"])
-        return
-    try:
-        emotion_service.warm_up()  # 모델을 한 번만 읽고 첫 예측을 미리 돌려 둡니다.
-    # 의도한 넓은 예외 처리: 모델 폴더 없음, GPU 오류 등 어떤 오류든 서버는 켜고 분석 경로만 503
-    except Exception as exc:  # noqa: BLE001
-        EMOTION_STATUS["reason"] = f"감정 모델을 불러오지 못했습니다 ({type(exc).__name__}: {exc})"
-        logger.warning("감정 분석 꺼짐: %s", EMOTION_STATUS["reason"])
-        return
-    EMOTION_STATUS["ready"] = True
-    EMOTION_STATUS["reason"] = ""
+    _prepare(EMOTION_STATUS, emotion_service, _EMOTION_IMPORT_ERROR, "감정 분석")
+
+
+def prepare_stt_model() -> None:
+    _prepare(STT_STATUS, stt_service, _STT_IMPORT_ERROR, "받아쓰기")
 # -------------------------------------------------------------------------
 
 
@@ -65,6 +85,7 @@ def prepare_emotion_model() -> None:
 async def lifespan(app: FastAPI):
     init_db()
     prepare_emotion_model()  # 감정 모델은 서버가 켜질 때 한 번만 불러옵니다.
+    prepare_stt_model()  # 받아쓰기 모델도 미리 불러와 첫 녹음이 느리지 않게 합니다.
     yield
 
 
@@ -117,16 +138,24 @@ def analyze_record(payload: RecordCreate):
     #    (2,000자 초과는 RecordCreate가 이미 422로 막습니다.)
     if not payload.text.strip():
         raise HTTPException(status_code=422, detail="감정을 분석할 글이 비어 있습니다.")
+    return _analyze_and_save(payload.text)
 
+
+def _check_emotion_ready() -> None:
     if not EMOTION_STATUS["ready"] or emotion_service is None:
         raise HTTPException(
             status_code=503,
             detail="감정 분석을 지금 사용할 수 없습니다. POST /api/records로 기록 후 감정 버튼 4개로 진행하세요.",
         )
 
+
+def _analyze_and_save(text: str) -> EmotionResult:
+    """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
+    _check_emotion_ready()
+
     # 1) 감정 분석 먼저 (아직 DB에 아무것도 쓰지 않음)
     try:
-        result = emotion_service.analyze_text(payload.text, record_id=None)
+        result = emotion_service.analyze_text(text, record_id=None)
     except ValueError as exc:  # 빈 글, 너무 긴 글 등 입력 문제
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # 모델 실행 중 오류
@@ -135,7 +164,7 @@ def analyze_record(payload: RecordCreate):
 
     # 2) 결과 양식 검사: /api/emotions와 같은 규칙(schemas.EmotionResult)으로 확인
     try:
-        checked = EmotionResult(**{**result, "record_id": 1, "text": payload.text})  # record_id는 저장 후 채움
+        checked = EmotionResult(**{**result, "record_id": 1, "text": text})  # record_id는 저장 후 채움
     except (ValidationError, TypeError) as exc:
         logger.error("감정 결과 양식 오류: %s", exc)
         raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
@@ -154,6 +183,54 @@ def analyze_record(payload: RecordCreate):
         con.close()
 
     return checked.model_copy(update={"record_id": record_id})
+
+
+MAX_AUDIO_BYTES = 3 * 1024 * 1024  # 10초 wav(48kHz 스테레오) 약 1.9MB + 여유
+
+
+@app.post("/api/records/voice", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
+async def analyze_voice(request: Request):
+    """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기 → 글 감정 분석 → 저장까지 합니다.
+
+    - 응답·저장·같은 날 덮어쓰기 규칙은 POST /api/records/analyze와 같습니다.
+    - 녹음은 메모리에서만 처리하고 디스크에 쓰지 않습니다(multipart 임시 파일 없음).
+    - 실패하면 아무것도 저장하지 않습니다.
+    """
+    # 0) 크기 제한: 조금씩 읽다가 넘으면 바로 끊음 (큰 파일을 끝까지 받지 않음)
+    if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="녹음 파일은 3MB 이하여야 합니다.")
+    audio = bytearray()
+    async for chunk in request.stream():
+        audio += chunk
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise HTTPException(status_code=413, detail="녹음 파일은 3MB 이하여야 합니다.")
+    if not audio:
+        raise HTTPException(status_code=400, detail="녹음 파일이 비어 있습니다.")
+
+    # 모델 계산은 오래 걸리므로 별도 스레드에서 (서버의 다른 요청이 멈추지 않게)
+    return await run_in_threadpool(_voice_to_result, bytes(audio))
+
+
+def _voice_to_result(audio: bytes) -> EmotionResult:
+    if not STT_STATUS["ready"] or stt_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="받아쓰기를 지금 사용할 수 없습니다. 글로 기록해 주세요.",
+        )
+    _check_emotion_ready()  # 받아쓰기 전에 확인해서 헛수고를 막음
+
+    try:
+        text = stt_service.transcribe(audio)
+    except ValueError as exc:  # 읽을 수 없는 녹음 파일
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # 모델 실행 중 오류
+        logger.exception("받아쓰기 실패")
+        raise HTTPException(status_code=503, detail="받아쓰기 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
+
+    # ponytail: 빈 글만 막음. Whisper가 무음에서 글을 지어내면 못 막음 → 필요하면 소리 크기 검사 추가
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="말소리를 알아듣지 못했어요. 다시 녹음하거나 글로 적어 주세요.")
+    return _analyze_and_save(text)
 
 
 @app.post("/api/emotions", tags=["감정 인식 연동"])
