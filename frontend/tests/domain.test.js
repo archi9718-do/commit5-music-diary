@@ -34,19 +34,24 @@ test("좋아요·건너뜀·완청 상태와 감상 완료 조건",()=>{
   const complete=nextTrackState(skipped,"finish");
   assert.deepEqual(complete,{liked:false,skipped:false,engraved:false,completed:true});
   assert.equal(nextTrackState(complete,"skip").skipped,false);
-  assert.equal(canReview(["a","b","c"],{a:complete,b:skipped}),false);
-  assert.equal(canReview(["a","b","c"],{a:complete,b:complete}),true);
+  assert.equal(canReview("low",["a","b","c"],{a:complete,b:skipped}),false);
+  for(const mood of ["low","tender","good","steady"]){
+    assert.equal(canReview(mood,["a","b","c"],{a:complete,b:complete}),mood==="low"||mood==="tender");
+  }
 });
 test("좋아요하지 않은 곡은 LP판에 새기지 않고, 완청 기준이 부족하면 응답은 저장하지 않는다",()=>{
   const queue=recommend("low"), [a,b,c]=queue.map(x=>x.id);
-  const draft={day:"2026-11-13",input:" 오늘 ",mood:"low",mode:"text",response:"비슷해요",queue,engrave:[a,b,"unknown"],tracks:{[a]:{liked:true,completed:true},[b]:{skipped:true}}};
+  const draft={day:"2026-11-13",input:" 오늘 ",mood:"low",mode:"text",response:"그대로예요",queue,engrave:[a,b,"unknown"],tracks:{[a]:{liked:true,completed:true},[b]:{skipped:true}}};
   const r=makeRecord(draft);
   assert.equal(r.input,"오늘");
   assert.equal(r.response,"");
   assert.equal(r.tracks[a].engraved,true);
   assert.equal(r.tracks[b].engraved,false);
   assert.equal(r.tracks[c].engraved,false);
-  assert.equal(makeRecord({...draft,tracks:{...draft.tracks,[b]:{completed:true}}}).response,"비슷해요");
+  const eligible={...draft,tracks:{...draft.tracks,[b]:{completed:true}}};
+  assert.equal(makeRecord(eligible).response,"그대로예요");
+  assert.equal(makeRecord({...eligible,response:"무응답"}).response,"무응답");
+  assert.equal(makeRecord({...eligible,mood:"good"}).response,"");
 });
 test("날짜 이동과 월별 요약을 로컬 날짜 기준으로 계산한다",()=>{
   assert.equal(localDay(new Date(2026,10,3)),"2026-11-03");
