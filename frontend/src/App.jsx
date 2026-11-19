@@ -1,5 +1,5 @@
 import React, {useEffect, useRef, useState} from "react";
-import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, canReview, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
+import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
 import {request, moodId, analysisResult, lpTracks, lpStates, songState} from "./api.js";
 
 const PAGES={
@@ -16,6 +16,7 @@ const PAGES={
 const TABS=[["record","기록","note"],["history","내역","history"],["today","나의 LP","disc"],["me","마이","user"]];
 const STORE="moodwave.mvp.records.v1";
 const PREF="moodwave.mvp.entry.v1";
+const MAX_RECORDING_SECONDS=10;
 const read=(key, fallback)=>{try{return JSON.parse(localStorage.getItem(key)??"null")??fallback;}catch{return fallback;}};
 const write=(key,data)=>{try{localStorage.setItem(key,JSON.stringify(data));return true;}catch{return false;}};
 const route=()=>{const key=location.hash.replace(/^#\/?/,"").split("?")[0];return Object.hasOwn(PAGES,key)?key:"start";};
@@ -90,11 +91,11 @@ function Voice({onAnalyze,onFail,onBack}){
       recorder.onstop=()=>{clearInterval(timer.current);stopStream();rec.current=null;if(alive.current)setStatus("done");};
       recorder.onerror=()=>{clearInterval(timer.current);stopStream();if(alive.current)onFail("녹음을 마치지 못했어요. 글이나 직접 선택으로 계속할 수 있어요.");};
       recorder.start();setStatus("recording");
-      let i=0;timer.current=setInterval(()=>{i++;setSeconds(i);if(i>=15)stop();},1000);
+      let i=0;timer.current=setInterval(()=>{i++;setSeconds(i);if(i>=MAX_RECORDING_SECONDS)stop();},1000);
     }catch{stopStream();if(alive.current)onFail("마이크 권한이 없거나 장치를 사용할 수 없어요. 글이나 직접 선택으로 계속할 수 있어요.");}
     finally{if(alive.current)setBusy(false);}
   };
-  return <><Heading title="음성 녹음" desc="최대 15초 동안 말해볼 수 있어요."/><div className={`mic-stage ${status==="recording"?"live":""}`}><Icon name="mic" size={38}/><strong aria-live="polite">0:{String(seconds).padStart(2,"0")}</strong><span>{status==="recording"?"녹음 중":status==="done"?"녹음 종료 · 원본 미저장":"녹음 대기"}</span></div>
+  return <><Heading title="음성 녹음" desc={`최대 ${MAX_RECORDING_SECONDS}초 동안 말해볼 수 있어요.`}/><div className={`mic-stage ${status==="recording"?"live":""}`}><Icon name="mic" size={38}/><strong aria-live="polite">0:{String(seconds).padStart(2,"0")}</strong><span>{status==="recording"?"녹음 중":status==="done"?"녹음 종료 · 원본 미저장":"녹음 대기"}</span></div>
   {status==="done"&&<label className="field">말한 내용을 글로 남기고 싶다면<textarea maxLength={300} value={words} onChange={e=>setWords(e.target.value)} rows={3} placeholder="비워두면 감정을 직접 고를 수 있어요."/></label>}
   <Notice>마이크 녹음만 시연해요. 음성 분석·자동 받아쓰기는 연결하지 않았어요. 원본 음성은 저장하거나 전송하지 않아요.</Notice>
   <div className="actions">{status==="recording"?<Btn onClick={stop}>녹음 종료</Btn>:status==="done"?<><Btn onClick={()=>onAnalyze(words)}>기록 완료</Btn><Btn variant="secondary" disabled={busy} onClick={start}>다시 녹음하기</Btn></>:<Btn disabled={busy} onClick={start}>{busy?"권한 확인 중":"녹음 시작"}</Btn>}<button className="link" onClick={onBack}>글로 기록하기</button></div></>;
@@ -280,7 +281,7 @@ export default function App(){
   }
   function finishReaction(){
     run(()=>{
-      if(canReview(queue.map(t=>t.id),reactionStates.current))go("complete");
+      if(canReview(draft.mood,queue.map(t=>t.id),reactionStates.current))go("complete");
       else prepareLP();
     },setFlash);
   }
@@ -294,7 +295,7 @@ export default function App(){
   useEffect(()=>{
     if(["recommend","player","react","complete","engrave"].includes(page)&&!draft.mood)go("record",false);
     if(page==="voice"&&!agreed)go("consent",false);
-    if(page==="complete"&&draft.mood&&!canReview(queue.map(t=>t.id),draft.tracks))go("react",false);
+    if(page==="complete"&&draft.mood&&!canReview(draft.mood,queue.map(t=>t.id),draft.tracks))go("react",false);
   },[page,draft.mood,draft.tracks,agreed]);
   const savePref=to=>{setEntry(to);if(write(PREF,to))setFlash("첫 화면 설정을 저장했어요.");else setFlash("설정을 이 브라우저에 저장할 수 없어요.");};
   const clearAll=()=>{
@@ -317,8 +318,8 @@ export default function App(){
       case "low":case "manual":return <><Heading title={PAGES[page][0]} desc={page==="low"?"기록만으로는 판단하기 어려워요. 가까운 감정을 골라주세요.":"지금 마음에 가까운 감정을 하나 골라주세요."}/><LP/><MoodSelect active={pick} onPick={id=>page==="low"?accept(id):setPick(id)}/>{page==="manual"&&<div className="actions"><Btn disabled={!pick} onClick={()=>accept(pick)}>선택 완료</Btn></div>}</>;
       case "recommend":return <><Heading title="오늘의 추천 음악" desc="확정한 감정에 맞춰 세 곡을 골랐어요."/><div className="center mood-row"><span>확정 감정</span><Mood id={draft.mood}/></div><div className="cards">{queue.map((t,i)=><div key={t.id} className="track-card"><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>{t.artist}</small><p>{t.reason}</p></div><button className={`icon queue-like ${draft.tracks[t.id]?.liked?"liked":""}`} aria-label={`${t.title} ${draft.tracks[t.id]?.liked?"좋아요 취소":"좋아요"}`} aria-pressed={!!draft.tracks[t.id]?.liked} onClick={()=>setReaction(t.id,"like")}><Icon name="heart" size={17} fill={draft.tracks[t.id]?.liked?"currentColor":"none"}/></button><button className="icon play" aria-label={`${t.title} 재생 화면`} onClick={()=>selectTrack(i)}><Icon name="play" size={17}/></button></div>)}</div><div className="actions"><Btn variant="secondary" onClick={review}>곡에 반응 남기기</Btn></div><Notice>추천 목록은 서버에서 가져와요. 재생에는 직접 합성한 시연 음원을 사용해요.</Notice></>;
       case "player":return <Player queue={queue} index={index} onIndex={setIndex} onAction={setReaction} onReview={review}/>;
-      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡 · 이 시연에서는 곡이 끝나면 완청으로 표시돼요. 두 곡 이상을 들으면 감상 후 기분을 답할 수 있어요.</Notice><div className="actions"><Btn onClick={finishReaction}>감상 마치기</Btn><Btn variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
-      case "complete":return <><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>patch({response:x})}>{x}</Btn>)}<Btn disabled={!draft.response} onClick={prepareLP}>계속하기</Btn><button className="link" onClick={()=>{patch({response:""});prepareLP();}}>건너뛰기</button></div></>;
+      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡 · 이 시연에서는 곡이 끝나면 완청으로 표시돼요.</Notice><div className="actions"><Btn onClick={finishReaction}>감상 마치기</Btn><Btn variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
+      case "complete":return <><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>patch({response:x})}>{x}</Btn>)}<Btn disabled={!draft.response} onClick={prepareLP}>계속하기</Btn><button className="link" onClick={()=>{patch({response:NO_MOOD_RESPONSE});prepareLP();}}>건너뛰기</button></div></>;
       case "engrave":return <><Heading title="LP 새김 확인" desc={liked.length?"좋아요한 곡 중 LP판에 남길 곡을 골라주세요.":"좋아요한 곡이 없어요. 감정과 기록만 남길 수 있어요."}/><LP/>{liked.length>0&&<div className="surface mini-list">{liked.map(t=><label className="checkline" key={t.id}><input type="checkbox" checked={draft.engrave.includes(t.id)} onChange={e=>setDraft(d=>({...d,engrave:e.target.checked?[...d.engrave,t.id]:d.engrave.filter(id=>id!==t.id)}))}/>{t.title}</label>)}</div>}<Notice>서버에 기록을 저장하고 이 브라우저에서 날짜별로 볼 수 있어요.</Notice><div className="actions"><Btn disabled={!draft.engrave.length} onClick={()=>persist(draft.engrave,"engraved")}>LP판에 새기기</Btn><Btn variant="secondary" onClick={()=>persist([],"today")}>기록만 저장하기</Btn><button className="link" onClick={back}>돌아가기</button></div></>;
       case "engraved":return <><Heading title="LP 새김 완료" desc={`${Object.values(todaysRecord?.tracks??{}).filter(t=>t.engraved).length}곡을 LP판에 담았어요.`}/><LP done/><div className="surface mini-list">{(todaysRecord?.trackIds??[]).filter(id=>todaysRecord?.tracks[id]?.engraved).map(id=><p key={id}><Icon name="check" size={16}/>{savedTrack(todaysRecord,id)?.title}</p>)}</div><div className="actions"><Btn onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;
       case "today":return <><Heading title={viewDay&&viewDay!==today?"그날의 LP판":"오늘의 LP판"} desc={dateLabel(viewDay||today)}/>{viewRecord?<div className="surface daily-card"><div className="daily-top"><LP small/><div><Mood id={viewRecord.mood}/><p>{viewRecord.input||"감정만 기록했어요."}</p></div></div>{viewRecord.response&&<p className="daily-response">감상 후 기분 · {viewRecord.response}</p>}<h2>오늘의 추천 음악</h2>{(viewRecord.trackIds??[]).map(id=>{const t=savedTrack(viewRecord,id),s=viewRecord.tracks[id]??{};return t&&<div className="saved-track" key={id}><Cover theme={t.theme}/><div><strong>{t.title}</strong><small>{[s.liked&&"좋아요",s.skipped&&"건너뜀",s.completed&&"완청",s.engraved&&"새김"].filter(Boolean).join(" · ")||"반응 없음"}</small></div></div>;})}</div>:<div className="empty"><LP small/><strong>아직 저장한 기록이 없어요.</strong><p>기록을 마치면 여기에 LP판이 쌓여요.</p></div>}<div className="actions"><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 보기</Btn>{!viewRecord&&<Btn onClick={startNew}>오늘을 기록하기</Btn>}</div></>;

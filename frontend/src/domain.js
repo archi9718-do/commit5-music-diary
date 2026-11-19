@@ -50,8 +50,10 @@ export function recommend(mood) {
   const order=ORDER[mood]??ORDER.steady;
   return order.map((id,i)=>({...getTrack(id),reason:(REASONS[mood]??REASONS.steady)[i]}));
 }
-export const RESPONSES=["조금 나아졌어요","비슷해요","더 무거워졌어요","잘 모르겠어요"];
-export const canReview = (ids,states)=>ids.filter(id=>states[id]?.completed).length>=2;
+export const RESPONSES=["조금 나아졌어요","그대로예요","더 무거워졌어요"];
+export const NO_MOOD_RESPONSE="무응답";
+export const canReview = (mood,ids,states)=>
+  (mood==="low"||mood==="tender")&&ids.filter(id=>states[id]?.completed).length>=2;
 export function nextTrackState(previous={}, action) {
   if (action==="like") return previous.liked
     ? {...previous,liked:false,engraved:false}
@@ -94,7 +96,7 @@ export function monthlyMusic(records) {
 export function makeRecord({day,input,mood,mode,response,tracks,queue,engrave}) {
   const ids=queue.map(t=>t.id);
   const keep=new Set(engrave.filter(id=>ids.includes(id)&&tracks[id]?.liked));
-  return {day,input:input.trim(),mood,mode,response:canReview(ids,tracks)?response:"",trackIds:ids,tracks:Object.fromEntries(ids.map(id=>[id,{...tracks[id],engraved:keep.has(id)}]))};
+  return {day,input:input.trim(),mood,mode,response:canReview(mood,ids,tracks)?response:"",trackIds:ids,tracks:Object.fromEntries(ids.map(id=>[id,{...tracks[id],engraved:keep.has(id)}]))};
 }
 
 export function dayType(mood) {
