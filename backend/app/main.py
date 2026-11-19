@@ -13,6 +13,7 @@ from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_reco
 from .recommender import ScoreDataError, recommend_three
 from .schemas import (
     EmotionResult,
+    EngraveRequest,
     RecommendationRequest,
     RecommendationResponse,
     RecordCreate,
@@ -298,8 +299,9 @@ def update_song_feedback(
     response_model=list[SongFeedback],
     tags=["추천곡 반응"],
 )
-def engrave_liked_songs(record_id: int = PathParam(gt=0)):
-    """그날의 판에 새기기: 좋아요를 누른 곡만 새깁니다(팀 결정 5). 여러 번 불러도 결과가 같습니다."""
+def engrave_liked_songs(payload: EngraveRequest | None = None, record_id: int = PathParam(gt=0)):
+    """선택한 좋아요 곡을 새깁니다. 본문을 생략하면 좋아요 곡을 모두 새깁니다."""
+    orders = set(payload.recommend_orders) if payload is not None else {1, 2, 3}
     con = connect()
     try:
         with con:
@@ -307,7 +309,11 @@ def engrave_liked_songs(record_id: int = PathParam(gt=0)):
             if exists is None:
                 raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
             con.execute(
-                "UPDATE tb_record_song SET is_engraved = is_liked WHERE record_id = ?", (record_id,)
+                """UPDATE tb_record_song
+                   SET is_engraved = is_liked AND
+                       CASE recommend_order WHEN 1 THEN ? WHEN 2 THEN ? WHEN 3 THEN ? ELSE 0 END
+                   WHERE record_id = ?""",
+                (1 in orders, 2 in orders, 3 in orders, record_id),
             )
             rows = con.execute(
                 """SELECT record_id, recommend_order, song_id, is_liked, is_skipped, is_completed, is_engraved

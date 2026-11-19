@@ -29,8 +29,10 @@ test("좋아요·건너뜀·완청 상태와 감상 완료 조건",()=>{
   const a=nextTrackState({}, "like");
   assert.equal(nextTrackState(a,"like").liked,false);
   const skipped=nextTrackState(a,"skip");
+  assert.deepEqual(skipped,{liked:false,skipped:true,engraved:false});
+  assert.equal(nextTrackState(skipped,"like").skipped,false);
   const complete=nextTrackState(skipped,"finish");
-  assert.deepEqual(complete,{liked:true,skipped:false,completed:true});
+  assert.deepEqual(complete,{liked:false,skipped:false,engraved:false,completed:true});
   assert.equal(nextTrackState(complete,"skip").skipped,false);
   assert.equal(canReview(["a","b","c"],{a:complete,b:skipped}),false);
   assert.equal(canReview(["a","b","c"],{a:complete,b:complete}),true);

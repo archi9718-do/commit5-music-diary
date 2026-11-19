@@ -61,6 +61,10 @@ class SongFeedbackUpdate(BaseModel):
         return self
 
 
+class EngraveRequest(BaseModel):
+    recommend_orders: list[Literal[1, 2, 3]] = Field(max_length=3)
+
+
 class SongFeedback(BaseModel):
     record_id: int
     recommend_order: int = Field(ge=1, le=3)
