@@ -9,6 +9,7 @@ os.environ["MOODWAVE_DB_PATH"] = str(Path(TEST_DIR.name) / "test.db")
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db import connect
 from app.main import app
 
 
@@ -70,3 +71,49 @@ def test_missing_record_and_bad_probabilities():
             "confidence": "높음",
         })
         assert invalid.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("days_ago", "same_user", "exclude_recent"),
+    [(7, True, True), (8, True, False), (1, False, False)],
+)
+def test_recommendations_use_only_same_users_previous_week(
+    monkeypatch, tmp_path, days_ago, same_user, exclude_recent,
+):
+    monkeypatch.setenv("MOODWAVE_DB_PATH", str(tmp_path / "recommendation_history.db"))
+    with TestClient(app) as client:
+        prior_id = client.post("/api/records", json={"text": "이전 기록"}).json()["record_id"]
+        first = client.post(
+            "/api/recommendations", json={"record_id": prior_id, "confirmed_emotion": "좋음"},
+        )
+        assert first.status_code == 200
+        prior_songs = {song["song_id"] for song in first.json()["songs"]}
+
+        con = connect()
+        try:
+            with con:
+                con.execute("UPDATE tb_record SET record_date = date(record_date, ?) WHERE record_id = ?",
+                            (f"-{days_ago} days", prior_id))
+                if not same_user:
+                    user_id = con.execute(
+                        "INSERT INTO tb_user (email, password_hash) VALUES (?, ?)", ("other@example.test", "test"),
+                    ).lastrowid
+                    con.execute("UPDATE tb_record SET user_id = ? WHERE record_id = ?", (user_id, prior_id))
+        finally:
+            con.close()
+
+        record_id = client.post("/api/records", json={"text": "오늘 기록"}).json()["record_id"]
+        payload = {"record_id": record_id, "confirmed_emotion": "좋음"}
+        response = client.post("/api/recommendations", json=payload)
+        assert response.status_code == 200
+        songs = response.json()["songs"]
+        ids = {song["song_id"] for song in songs}
+        assert len(ids) == 3
+        if exclude_recent:
+            assert ids.isdisjoint(prior_songs)
+        else:
+            assert ids == prior_songs
+
+        lp = client.get(f"/api/records/{record_id}/lp")
+        assert [song["song_id"] for song in lp.json()["songs"]] == [song["song_id"] for song in songs]
+        assert client.post("/api/recommendations", json=payload).json()["songs"] == songs

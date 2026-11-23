@@ -6,6 +6,7 @@
 import csv
 import math
 import os
+from collections.abc import Set
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -99,12 +100,8 @@ def load_song_scores(csv_path: Path) -> list[ScoredSong]:
     return songs
 
 
-def recommend_three(emotion: Emotion) -> list[Song]:
-    """사용자가 확정한 감정에 맞춰 중복 없는 3곡을 추천합니다.
-
-    환경변수로 점수 파일 위치와 사용 데이터셋 범위를 지정합니다.
-    결과는 상현과 협의한 Song JSON 형식을 그대로 유지합니다.
-    """
+def load_recommendation_candidates() -> list[ScoredSong]:
+    """설정된 점수표를 읽고 추천에 사용할 데이터셋만 남깁니다."""
     file_name = os.environ.get("MOODWAVE_SCORES_CSV")
     if not file_name:
         raise ScoreDataError("MOODWAVE_SCORES_CSV 환경변수가 설정되지 않았습니다.")
@@ -118,43 +115,75 @@ def recommend_three(emotion: Emotion) -> list[Song]:
     candidates = [song for song in catalog if scope == "ALL" or song.dataset == "DEAM"]
     if len(candidates) < 3:
         raise ScoreDataError("선택한 데이터셋에 추천 가능한 곡이 3개 미만입니다.")
+    return candidates
+
+
+def recommend_three(
+    emotion: Emotion,
+    recent_song_ids: Set[str] = frozenset(),
+    *,
+    candidates: list[ScoredSong] | None = None,
+) -> list[Song]:
+    """감정별 순서를 지키면서 이전 추천곡이 가장 적은 3곡을 고릅니다."""
+    if candidates is None:
+        candidates = load_recommendation_candidates()
+
+    def rank(song: ScoredSong, stage: int) -> tuple[bool, float, str]:
+        target_v, target_a, _ = TARGETS[emotion][stage]
+        return (
+            song.song_id in recent_song_ids,
+            (song.valence - target_v) ** 2 + (song.arousal - target_a) ** 2,
+            song.song_id,
+        )
 
     selected: list[ScoredSong] = []
-    results: list[Song] = []
-
-    for target_v, target_a, step in TARGETS[emotion]:
-        used = {song.song_id for song in selected}
-        eligible = [song for song in candidates if song.song_id not in used]
-
-        if selected and emotion == "가라앉음":
-            # 슬픈 날에는 실제 곡 점수가 이전 곡보다 밝아지도록 보장합니다.
-            eligible = [song for song in eligible if song.valence > selected[-1].valence]
-        elif selected and emotion == "예민함":
-            # 예민한 날에는 에너지를 단계적으로 낮춥니다.
-            eligible = [song for song in eligible if song.arousal < selected[-1].arousal]
-            if len(selected) == 2:
-                # 마지막 곡은 한 단계 차분하면서 조금 더 밝게 마무리합니다.
-                eligible = [song for song in eligible if song.valence > selected[-1].valence]
-
-        if not eligible:
-            raise ScoreDataError("감정별 3곡 흐름을 만족하는 후보가 부족합니다.")
-
-        # 두 점수의 단위가 0~1이므로 유클리드 거리 제곱으로 간단히 비교합니다.
-        # 동점일 때는 song_id 순으로 선택해 동일 입력의 결과를 재현할 수 있게 합니다.
-        chosen = min(
-            eligible,
-            key=lambda song: (
-                (song.valence - target_v) ** 2 + (song.arousal - target_a) ** 2,
-                song.song_id,
-            ),
+    for stage in range(3):
+        eligible = (
+            song for song in candidates
+            if song not in selected
+            and (not selected or _can_follow(emotion, selected[-1], song, stage))
         )
-        selected.append(chosen)
-        results.append(
-            Song(
-                song_id=chosen.song_id,
-                brightness=chosen.valence,
-                energy=chosen.arousal,
-                step=step,
+        best = min(eligible, key=lambda song: rank(song, stage), default=None)
+        if best is None:
+            break
+        selected.append(best)
+
+    # 새 곡이 충분하면 0곡, 부족하면 부족분이 재추천 곡 수의 하한입니다.
+    min_repeats = max(0, 3 - sum(song.song_id not in recent_song_ids for song in candidates))
+    if emotion in {"가라앉음", "예민함"} and (
+        len(selected) < 3 or sum(song.song_id in recent_song_ids for song in selected) > min_repeats
+    ):
+        def path_rank(path: tuple[ScoredSong, ...], start: int):
+            return (
+                sum(song.song_id in recent_song_ids for song in path),
+                tuple(rank(song, stage) for stage, song in enumerate(path, start)),
             )
-        )
-    return results
+
+        # 가라앉음·예민함은 밝기 또는 에너지가 계속 변하므로 같은 곡이 다시 나올 수 없습니다.
+        # 마지막부터 각 후보가 이어 갈 수 있는 최선의 조합을 찾아 모든 유효한 첫 곡을 비교합니다.
+        tails: list[tuple[ScoredSong, ...]] = [(song,) for song in candidates]
+        for stage in (1, 0):
+            tails.sort(key=lambda tail: path_rank(tail, stage + 1))
+            paths = []
+            for song in candidates:
+                tail = next((tail for tail in tails if _can_follow(emotion, song, tail[0], stage + 1)), None)
+                if tail is not None:
+                    paths.append((song, *tail))
+            tails = paths
+        selected = list(min(tails, key=lambda path: path_rank(path, 0), default=()))
+
+    if len(selected) != 3:
+        raise ScoreDataError("감정별 3곡 흐름을 만족하는 후보가 부족합니다.")
+
+    return [
+        Song(song_id=song.song_id, brightness=song.valence, energy=song.arousal, step=step)
+        for song, (_, _, step) in zip(selected, TARGETS[emotion], strict=True)
+    ]
+
+
+def _can_follow(emotion: Emotion, previous: ScoredSong, song: ScoredSong, stage: int) -> bool:
+    if emotion == "가라앉음":
+        return song.valence > previous.valence
+    if emotion == "예민함":
+        return song.arousal < previous.arousal and (stage == 1 or song.valence > previous.valence)
+    return True
