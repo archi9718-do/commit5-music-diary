@@ -4,6 +4,7 @@
 # 녹음은 메모리(bytes)로만 받고 디스크에 쓰지 않습니다 → 처리 뒤 원본이 남지 않습니다.
 import io
 import os
+from itertools import chain
 
 import av
 import numpy as np
@@ -50,13 +51,21 @@ def decode_audio(audio_bytes: bytes) -> np.ndarray:
     """wav·webm(opus)·m4a 등 무엇이든 16kHz 한 채널 float32로 바꿉니다. (av 안의 ffmpeg 사용)"""
     resampler = av.AudioResampler(format="flt", layout="mono", rate=TARGET_SR)
     chunks = []
+    remaining = MAX_SEC * TARGET_SR
     with av.open(io.BytesIO(audio_bytes)) as container:
-        for frame in container.decode(audio=0):
-            chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(frame)]
-    chunks += [f.to_ndarray().reshape(-1) for f in resampler.resample(None)]  # 남은 소리 비우기
+        if not container.streams.audio:
+            raise ValueError("녹음에서 소리를 찾지 못했습니다.")
+        # 10초를 채우면 디코더도 닫아 압축 파일의 나머지를 펼치지 않습니다.
+        for frame in chain(container.decode(audio=0), (None,)):
+            for converted in resampler.resample(frame):
+                samples = converted.to_ndarray().reshape(-1)[:remaining]
+                chunks.append(samples)
+                remaining -= samples.size
+                if not remaining:
+                    return np.concatenate(chunks)
     if not chunks:
         raise ValueError("녹음에서 소리를 찾지 못했습니다.")
-    return np.concatenate(chunks)[: MAX_SEC * TARGET_SR]
+    return np.concatenate(chunks)
 
 
 def warm_up() -> None:

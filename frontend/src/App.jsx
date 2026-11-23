@@ -1,5 +1,5 @@
 import React, {useEffect, useRef, useState} from "react";
-import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
+import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
 import {request, moodId, analysisResult, lpTracks, lpStates, songState} from "./api.js";
 
 const PAGES={
@@ -16,11 +16,24 @@ const PAGES={
 const TABS=[["record","기록","note"],["history","내역","history"],["today","나의 LP","disc"],["me","마이","user"]];
 const STORE="moodwave.mvp.records.v1";
 const PREF="moodwave.mvp.entry.v1";
+const PENDING_LP="moodwave.mvp.pending-lp.v1";
 const MAX_RECORDING_SECONDS=10;
 const read=(key, fallback)=>{try{return JSON.parse(localStorage.getItem(key)??"null")??fallback;}catch{return fallback;}};
 const write=(key,data)=>{try{localStorage.setItem(key,JSON.stringify(data));return true;}catch{return false;}};
 const route=()=>{const key=location.hash.replace(/^#\/?/,"").split("?")[0];return Object.hasOwn(PAGES,key)?key:"start";};
-const fresh=()=>({input:"",mood:null,mode:"text",response:"",tracks:{},engrave:[],queue:[],recordId:null,demo:false,replacing:false,saved:false});
+function readPendingLP(){
+  try{
+    const saved=JSON.parse(sessionStorage.getItem(PENDING_LP)??"null");
+    return Number.isSafeInteger(saved?.recordId)&&saved.recordId>0&&/^\d{4}-\d{2}-\d{2}$/.test(saved.day)?saved:null;
+  }catch{return null;}
+}
+function writePendingLP(value){
+  try{
+    if(value)sessionStorage.setItem(PENDING_LP,JSON.stringify(value));
+    else sessionStorage.removeItem(PENDING_LP);
+  }catch{}
+}
+const fresh=()=>({input:"",mood:null,mode:"text",response:"",askMood:false,tracks:{},engrave:[],queue:[],recordId:null,demo:false,replacing:false,saved:false});
 const emptyResult={kind:"low",candidates:[]};
 const savedTrack=(record,id)=>record?.queue?.find(track=>track.id===id)??getTrack(id);
 
@@ -56,15 +69,21 @@ function Player({queue,index,onIndex,onAction,onReview}){
   useEffect(()=>{
     const a=audio.current;
     setTime(0); setDuration(track?.seconds??16); setPlaying(false);setIssue("");
-    if (a && auto.current) {auto.current=false;a.play().catch(()=>setIssue("재생 버튼을 눌러 들을 수 있어요."));}
+    if (a && auto.current) {auto.current=false;a.play().catch(()=>{if(audio.current===a)setIssue("재생 버튼을 눌러 들을 수 있어요.");});}
+    return ()=>a?.pause();
   },[trackId]);
   if(!track)return null;
-  const toggle=()=>{const a=audio.current;if(!a)return;if(!a.paused){a.pause();return;}a.play().catch(()=>setIssue("재생을 시작하지 못했어요. 잠시 후 다시 눌러주세요."));};
+  const toggle=()=>{const a=audio.current;if(!a)return;if(!a.paused){a.pause();return;}a.play().catch(()=>{if(audio.current===a)setIssue("재생을 시작하지 못했어요. 잠시 후 다시 눌러주세요.");});};
   const move=(offset,skip=false)=>{if(skip)onAction(trackId,"skip");const next=index+offset;if(next<0||next>=queue.length){onReview();return;}auto.current=!!audio.current&&!audio.current.paused;onIndex(next);};
-  const end=()=>{setPlaying(false);onAction(trackId,"finish");};
+  const end=event=>{
+    setPlaying(false);
+    const {played,duration}=event.currentTarget;
+    if(hasCompletedPlayback(played,duration)){setIssue("");onAction(trackId,"finish");}
+    else setIssue("건너뛴 구간이 있어요. 전체를 들으면 완청으로 기록돼요.");
+  };
   const clock=x=>`${Math.floor(x/60)}:${String(Math.floor(x%60)).padStart(2,"0")}`;
   return <><Heading title="음악 감상" desc="추천곡마다 짧은 시연용 합성 음원을 재생해요."/><LP playing={playing}/><div className="track-center"><h2>{track.title}</h2><p>{track.artist}</p></div>
-    <audio ref={audio} src={`${import.meta.env.BASE_URL}audio/${track.previewId??track.id}.wav`} preload="metadata" onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onLoadedMetadata={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);}} onTimeUpdate={e=>setTime(e.currentTarget.currentTime)} onEnded={end} onError={()=>setIssue("시연 음원을 불러오지 못했어요.")}/>
+    <audio key={trackId} ref={audio} src={`${import.meta.env.BASE_URL}audio/${track.previewId??track.id}.wav`} preload="metadata" onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onLoadedMetadata={e=>{if(Number.isFinite(e.currentTarget.duration))setDuration(e.currentTarget.duration);}} onTimeUpdate={e=>setTime(e.currentTarget.currentTime)} onEnded={end} onError={()=>setIssue("시연 음원을 불러오지 못했어요.")}/>
     <label className="seek"><span className="sr-only">재생 위치</span><input type="range" aria-label="재생 위치" min="0" max={duration||16} step=".1" value={Math.min(time,duration)} onChange={e=>{if(audio.current)audio.current.currentTime=Number(e.target.value);setTime(Number(e.target.value));}}/><span><span>{clock(time)}</span><span>{clock(duration)}</span></span></label>
     <div className="player-actions"><button className="icon" aria-label="이전 곡" disabled={index===0} onClick={()=>move(-1)}><Icon name="back"/></button><button className="icon play-main" aria-label={playing?"일시정지":"재생"} onClick={toggle}><Icon name={playing?"pause":"play"} size={25}/></button><button className="icon" aria-label="다음 곡" disabled={index===queue.length-1} onClick={()=>move(1)}><Icon name="next"/></button></div>
     <p className="counter">{index+1} / {queue.length}</p>{issue&&<Notice kind="warn">{issue}</Notice>}
@@ -104,12 +123,16 @@ function Voice({onAnalyze,onFail,onBack}){
 
 export default function App(){
   const [page,setPage]=useState(route),[navStack,setNavStack]=useState([]);
+  const navigation=useRef({page,revision:0});
+  const [recovery,setRecovery]=useState(()=>["complete","engrave"].includes(route())?readPendingLP():null);
+  const [recoveryError,setRecoveryError]=useState("");
   const [entry,setEntry]=useState(()=>read(PREF,"record")==="history"?"history":"record");
   const [records,setRecords]=useState(()=>{const a=read(STORE,[]);return Array.isArray(a)?a.filter(r=>r&&typeof r.day==="string"):[];});
   const [draft,setDraft]=useState(fresh),[result,setResult]=useState(emptyResult),[pick,setPick]=useState(null);
   const [index,setIndex]=useState(0),[agreed,setAgreed]=useState(false),[message,setMessage]=useState(""),[flash,setFlash]=useState("");
   const [month,setMonth]=useState(()=>localDay().slice(0,7)),[viewDay,setViewDay]=useState(""),[demo,setDemo]=useState(false);
   const pending=useRef(false), reactions=useRef(Promise.resolve()), reactionStates=useRef({});
+  const unsavedCompletions=useRef(new Set());
   const [busy,setBusy]=useState(false);
   const main=useRef(null),today=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Seoul"}).format(new Date());
   const queue=draft.queue,count=queue.filter(t=>draft.tracks[t.id]?.completed).length;
@@ -117,14 +140,24 @@ export default function App(){
   const viewRecord=records.find(a=>a.day===(viewDay||today));
   const liked=queue.filter(t=>draft.tracks[t.id]?.liked);
   const patch=(p)=>setDraft(old=>({...old,...p}));
-  useEffect(()=>{const h=()=>setPage(route());window.addEventListener("hashchange",h);return ()=>window.removeEventListener("hashchange",h);},[]);
+  function updatePage(to){
+    const previous=navigation.current;
+    if(previous.page!==to)navigation.current={page:to,revision:previous.revision+1};
+    setPage(to);
+  }
+  useEffect(()=>{const h=()=>updatePage(route());window.addEventListener("hashchange",h);return ()=>window.removeEventListener("hashchange",h);},[]);
   useEffect(()=>{if(!flash)return;const t=setTimeout(()=>setFlash(""),3700);return ()=>clearTimeout(t);},[flash]);
   useEffect(()=>{window.scrollTo({top:0,behavior:"instant"});main.current?.querySelector("h1")?.focus({preventScroll:true});},[page]);
   function go(to, remember=true){
     if(!Object.hasOwn(PAGES,to))return;
+    if(page==="complete"&&to!=="complete")patch({askMood:false});
     if(remember&&to!==page)setNavStack(s=>[...s.slice(-24),page]);
     if(location.hash!==`#/${to}`)location.hash=`/${to}`;
-    setPage(to);
+    updatePage(to);
+  }
+  function activeView(){
+    const current=navigation.current;
+    return ()=>navigation.current===current&&route()===current.page;
   }
   function back(){
     if(pending.current)return;
@@ -132,7 +165,7 @@ export default function App(){
     setNavStack(s=>s.slice(0,-1));go(to,false);
   }
   const preferred=()=>go(entry);
-  const startNew=()=>{if(pending.current)return;setDraft(fresh());setResult(emptyResult);setPick(null);go("record");};
+  const startNew=()=>{if(pending.current)return;writePendingLP(null);setDraft(fresh());setResult(emptyResult);setPick(null);go("record");};
   const goToday=(day="")=>{if(pending.current)return;setViewDay(day);go("today");};
   useEffect(()=>{
     if(page!=="today"||!viewRecord?.recordId||(viewRecord.recordId===draft.recordId&&!draft.saved))return;
@@ -141,11 +174,47 @@ export default function App(){
       if(!active||!lp.confirmed_emotion)return;
       const mood=moodId(lp.confirmed_emotion), tracks=lpTracks(lp.songs,mood);
       setRecords(old=>old.map(record=>record===viewRecord?{
-        ...record,input:lp.text,mood,queue:tracks,trackIds:tracks.map(track=>track.id),tracks:lpStates(lp.songs),
+        ...record,input:lp.text,mood,response:lp.mood_after??record.response??"",queue:tracks,trackIds:tracks.map(track=>track.id),tracks:lpStates(lp.songs),
       }:record));
     }).catch(()=>{if(active)setFlash("서버에서 LP를 불러오지 못해 브라우저에 저장된 기록을 표시해요.");});
     return ()=>{active=false;};
   },[page,viewDay,viewRecord?.recordId,draft.recordId,draft.saved]);
+
+  useEffect(()=>{
+    if(!recovery)return;
+    const isCurrent=activeView();
+    let active=true;
+    request(`/records/${recovery.recordId}/lp`).then(lp=>{
+      if(!active||!isCurrent())return;
+      const mood=moodId(lp.confirmed_emotion);
+      if(!mood){
+        writePendingLP(null);
+        setRecovery(null);
+        return;
+      }
+      if(lp.mood_after==null){
+        setRecoveryError("서버에서 저장된 응답을 아직 확인하지 못했어요.");
+        return;
+      }
+      const queue=lpTracks(lp.songs,mood), tracks=lpStates(lp.songs);
+      reactionStates.current=tracks;
+      setDraft({...fresh(),day:recovery.day,recordId:recovery.recordId,input:lp.text,mood,queue,tracks,
+        response:lp.mood_after,engrave:queue.filter(track=>tracks[track.id]?.liked).map(track=>track.id)});
+      setRecovery(null);
+      go("engrave",false);
+    }).catch(error=>{
+      if(!active||!isCurrent())return;
+      if(error.status===404){
+        writePendingLP(null);
+        setRecovery(null);
+      }else setRecoveryError("저장한 기분을 불러오지 못했어요. 다시 시도해주세요.");
+    });
+    return ()=>{active=false;};
+  },[recovery]);
+
+  useEffect(()=>{
+    if(recovery&&!["complete","engrave"].includes(page))setRecovery(null);
+  },[page,recovery]);
 
   async function run(work,onError){
     if(pending.current)return;
@@ -165,32 +234,40 @@ export default function App(){
   }
   const confirmReplacement=()=>draft.replacing||!todaysRecord||window.confirm("오늘 저장한 기록을 지금 내용으로 바꿀까요?");
 
-  function setReaction(id,action){
-    if(pending.current)return;
+  async function saveReaction(id,action){
     const track=queue.find(song=>song.id===id);
     if(!track)return;
-    reactions.current=reactions.current.then(async()=>{
-      const previous=reactionStates.current[id]??{};
-      if(action==="skip"&&(previous.completed||previous.skipped))return;
-      if(action==="finish"&&previous.completed)return;
-      const next=nextTrackState(previous,action);
-      if(!draft.demo){
-        const body=action==="finish"?{is_skipped:false,is_completed:true}
-          :{is_liked:next.liked,is_skipped:next.skipped};
-        try{
-          const saved=await request(`/records/${draft.recordId}/songs/${track.order}`,"PATCH",body);
-          reactionStates.current={...reactionStates.current,[id]:songState(saved)};
-        }catch(error){
-          if(error.status!==409)throw error;
-          const lp=await request(`/records/${draft.recordId}/lp`);
-          reactionStates.current=lpStates(lp.songs);
-        }
-      }else{
-        reactionStates.current={...reactionStates.current,[id]:next};
+    const previous=reactionStates.current[id]??{};
+    if(action==="skip"&&(previous.completed||previous.skipped))return;
+    if(action==="finish"&&previous.completed)return;
+    const next=nextTrackState(previous,action);
+    if(!draft.demo){
+      const body=action==="finish"?{is_skipped:false,is_completed:true}
+        :{is_liked:next.liked,is_skipped:next.skipped};
+      try{
+        const saved=await request(`/records/${draft.recordId}/songs/${track.order}`,"PATCH",body);
+        reactionStates.current={...reactionStates.current,[id]:songState(saved)};
+      }catch(error){
+        if(error.status!==409)throw error;
+        const lp=await request(`/records/${draft.recordId}/lp`);
+        reactionStates.current=lpStates(lp.songs);
       }
-      const tracks=reactionStates.current;
-      setDraft(old=>old.queue===queue?{...old,tracks,engrave:old.engrave.filter(key=>tracks[key]?.liked)}:old);
-    }).catch(()=>setFlash("곡 반응을 저장하지 못했어요. 다시 시도해주세요."));
+    }else{
+      reactionStates.current={...reactionStates.current,[id]:next};
+    }
+    const tracks=reactionStates.current;
+    setDraft(old=>old.queue===queue?{...old,tracks,engrave:old.engrave.filter(key=>tracks[key]?.liked)}:old);
+  }
+  async function saveCompletion(id){
+    await saveReaction(id,"finish");
+    if(!reactionStates.current[id]?.completed)throw new Error("완청 기록을 저장하지 못했어요. 감상 마치기를 눌러 다시 시도해주세요.");
+    unsavedCompletions.current.delete(id);
+  }
+  function setReaction(id,action){
+    if(pending.current)return;
+    if(action==="finish")unsavedCompletions.current.add(id);
+    reactions.current=reactions.current.then(()=>action==="finish"?saveCompletion(id):saveReaction(id,action))
+      .catch(()=>setFlash(action==="finish"?"완청 기록을 저장하지 못했어요. 감상 마치기를 누르면 다시 저장해요.":"곡 반응을 저장하지 못했어요. 다시 시도해주세요."));
   }
   function analyze(words,kind,isDemo=false){
     if(pending.current)return;
@@ -242,7 +319,9 @@ export default function App(){
         tracks=lpStates(lp.songs);
       }
       reactionStates.current=tracks;
-      patch({mood:id,queue:songs,tracks,response:"",engrave:[]});
+      unsavedCompletions.current.clear();
+      if(!draft.demo)writePendingLP(null);
+      patch({mood:id,queue:songs,tracks,response:"",askMood:false,engrave:[]});
       setIndex(0);
       go("recommend");
     },setFlash);
@@ -267,40 +346,97 @@ export default function App(){
   }
   function selectTrack(i){setIndex(i);go("player");}
   function review(){go("react");}
-  function prepareLP(){
-    patch({engrave:queue.filter(t=>reactionStates.current[t.id]?.liked).map(t=>t.id)});go("engrave");
+  function prepareLP(response){
+    patch({response,askMood:false,engrave:queue.filter(t=>reactionStates.current[t.id]?.liked).map(t=>t.id)});
+    go("engrave",page!=="complete");
   }
   function persist(ids,next){
     if(!draft.mood)return;
     if(draft.demo&&todaysRecord&&!window.confirm("오늘 저장한 기록을 시연 내용으로 바꿀까요?"))return;
     return run(async()=>{
-      let tracks=reactionStates.current, input=draft.input, mood=draft.mood, songs=queue;
+      const day=draft.day??today;
+      let tracks=reactionStates.current, input=draft.input, mood=draft.mood, songs=queue, response;
       if(!draft.demo){
         const path=`/records/${draft.recordId}`;
         await request(`${path}/engrave`,"POST",{recommend_orders:queue.filter(t=>ids.includes(t.id)).map(t=>t.order)});
         const lp=await request(`${path}/lp`);
         input=lp.text;
         mood=moodId(lp.confirmed_emotion);
+        response=lp.mood_after??"";
         songs=lpTracks(lp.songs,mood);
         tracks=lpStates(lp.songs);
         ids=songs.filter(t=>tracks[t.id].engraved).map(t=>t.id);
         reactionStates.current=tracks;
       }
-      const record={...makeRecord({...draft,input,mood,day:today,queue:songs,tracks,engrave:ids}),queue:songs,recordId:draft.recordId};
-      const nextRecords=[record,...records.filter(r=>r.day!==today)];
+      const record={...makeRecord({...draft,input,mood,day,queue:songs,tracks,engrave:ids}),queue:songs,recordId:draft.recordId};
+      if(!draft.demo)record.response=response;
+      const nextRecords=[record,...records.filter(r=>r.day!==day)];
       setRecords(nextRecords);
       patch({tracks,saved:true});
-      setViewDay(today);
+      setViewDay(day);
       if(!write(STORE,nextRecords))setFlash("이 브라우저에 기록 목록을 저장할 수 없어요.");
-      else if(next==="today")setFlash("오늘의 LP판에 기록했어요.");
+      else{
+        if(readPendingLP()?.recordId===draft.recordId)writePendingLP(null);
+        if(next==="today")setFlash("LP판에 기록했어요.");
+      }
       go(next);
     },setFlash);
   }
   function finishReaction(){
-    run(()=>{
-      if(canReview(draft.mood,queue.map(t=>t.id),reactionStates.current))go("complete");
-      else prepareLP();
-    },setFlash);
+    const isCurrent=activeView();
+    return run(async()=>{
+      if(!isCurrent())return;
+      if(draft.demo){
+        if(canReview(draft.mood,queue.map(t=>t.id),reactionStates.current)){
+          patch({askMood:true});
+          go("complete");
+        }else prepareLP("");
+        return;
+      }
+      for(const id of unsavedCompletions.current){
+        await saveCompletion(id);
+        if(!isCurrent())return;
+      }
+      const path=`/records/${draft.recordId}`;
+      const state=await request(`${path}/flow/end`,"POST");
+      if(!isCurrent())return;
+      if(!state.should_ask_mood){prepareLP(state.mood_after??"");return;}
+      let question;
+      try{
+        question=await request(`${path}/mood-question`,"POST");
+      }catch(error){
+        if(!isCurrent())return;
+        if(error.status!==409)throw error;
+        const latest=await request(`${path}/post-listening`);
+        if(isCurrent())prepareLP(latest.mood_after??"");
+        return;
+      }
+      if(!isCurrent())return;
+      if(question.show_question){
+        patch({askMood:true,response:""});
+        go("complete");
+      }else prepareLP(question.mood_after??"");
+    },message=>{if(isCurrent())setFlash(message);});
+  }
+  function submitMood(response){
+    if(!draft.askMood||!response)return;
+    if(draft.demo){prepareLP(response);return;}
+    const isCurrent=activeView();
+    return run(async()=>{
+      if(!isCurrent())return;
+      const path=`/records/${draft.recordId}`;
+      writePendingLP({recordId:draft.recordId,day:draft.day??today});
+      let saved;
+      try{
+        saved=await request(`${path}/mood-after`,"PATCH",{mood_after:response});
+      }catch(error){
+        if(error.status!==409)throw error;
+        saved=await request(`${path}/post-listening`);
+        if(saved.mood_after===null)throw error;
+        if(isCurrent())setFlash("이미 서버에 저장된 감상 후 기분을 불러왔어요.");
+      }
+      if(isCurrent())prepareLP(saved.mood_after);
+    },message=>{if(isCurrent())setFlash(message);});
   }
   function demoCase(kind){
     const map={high:"오늘은 행복하고 뿌듯하고 즐거웠어요.",medium:"오늘은 뿌듯했지만 한편으로 외롭고 속상했어요.",low:"오늘 하루가 지났어요."};
@@ -310,10 +446,12 @@ export default function App(){
     analyze(map[kind],"text",true);
   }
   useEffect(()=>{
+    if(recovery)return;
     if(["recommend","player","react","complete","engrave"].includes(page)&&!draft.mood)go("record",false);
     if(page==="voice"&&!agreed)go("consent",false);
-    if(page==="complete"&&draft.mood&&!canReview(draft.mood,queue.map(t=>t.id),draft.tracks))go("react",false);
-  },[page,draft.mood,draft.tracks,agreed]);
+    if(page==="complete"&&draft.mood&&!draft.askMood)go("react",false);
+    if(page!=="complete"&&draft.askMood)patch({askMood:false});
+  },[page,draft.mood,draft.askMood,agreed,recovery]);
   const savePref=to=>{setEntry(to);if(write(PREF,to))setFlash("첫 화면 설정을 저장했어요.");else setFlash("설정을 이 브라우저에 저장할 수 없어요.");};
   const clearAll=()=>{
     if(!window.confirm("이 브라우저에 저장한 MoodWave의 모든 기록을 지울까요?"))return;
@@ -323,6 +461,14 @@ export default function App(){
   const optionalVoice=()=>{patch({mode:"voice"});go(agreed?"voice":"consent");};
 
   function screen(){
+    if(recovery&&["complete","engrave"].includes(page))return <>
+      <Heading title="저장한 감상 후 기분 불러오기"/>
+      {recoveryError?<><Notice>{recoveryError}</Notice><div className="actions">
+        <Btn onClick={()=>{setRecoveryError("");setRecovery({...recovery});}}>다시 시도</Btn>
+        <Btn variant="secondary" onClick={startNew}>기록 화면으로 돌아가기</Btn>
+      </div></>
+        :<p role="status">서버에서 LP 기록을 확인하고 있어요.</p>}
+    </>;
     switch(page){
       case "start":return <><div className="start-kicker"><span/> MOOD JOURNAL</div><Heading title="오늘의 마음을 음악으로" desc="하루를 짧게 기록하고, 어울리는 음악을 LP판에 남겨보세요."/><LP/><div className="actions"><Btn onClick={preferred}>기록 시작 <Icon name="arrow" size={17}/></Btn><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 살펴보기</Btn></div><div className="demo-legal"><button className="link" onClick={()=>go("login")}>로그인 화면 보기</button><span>·</span><button className="link" onClick={()=>go("signup")}>회원가입 화면 보기</button></div><Notice>테스트 계정으로 기록을 저장하는 시제품이에요.</Notice></>;
       case "login":case "signup":return <><Heading title={PAGES[page][0]} desc="화면 미리보기 · 실제 계정 인증은 연결하지 않았어요."/><div className="surface auth-demo"><label className="field">아이디<input value="moodwave-demo" readOnly/></label><label className="field">비밀번호<input value="demo-only" type="password" readOnly/></label><Notice>예시 정보만 표시해요. 실제 아이디나 비밀번호를 입력하지 않아요.</Notice></div><div className="actions"><Btn onClick={preferred}>시연 모드로 계속하기</Btn><Btn variant="secondary" onClick={()=>go(page==="login"?"signup":"login")}>{page==="login"?"회원가입 화면 보기":"로그인 화면 보기"}</Btn></div></>;
@@ -335,10 +481,10 @@ export default function App(){
       case "low":case "manual":return <><Heading title={PAGES[page][0]} desc={page==="low"?"기록만으로는 판단하기 어려워요. 가까운 감정을 골라주세요.":"지금 마음에 가까운 감정을 하나 골라주세요."}/><LP/><MoodSelect active={pick} onPick={id=>page==="low"?accept(id):setPick(id)}/>{page==="manual"&&<div className="actions"><Btn disabled={!pick} onClick={()=>accept(pick)}>선택 완료</Btn></div>}</>;
       case "recommend":return <><Heading title="오늘의 추천 음악" desc="확정한 감정에 맞춰 세 곡을 골랐어요."/><div className="center mood-row"><span>확정 감정</span><Mood id={draft.mood}/></div><div className="cards">{queue.map((t,i)=><div key={t.id} className="track-card"><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>{t.artist}</small><p>{t.reason}</p></div><button className={`icon queue-like ${draft.tracks[t.id]?.liked?"liked":""}`} aria-label={`${t.title} ${draft.tracks[t.id]?.liked?"좋아요 취소":"좋아요"}`} aria-pressed={!!draft.tracks[t.id]?.liked} onClick={()=>setReaction(t.id,"like")}><Icon name="heart" size={17} fill={draft.tracks[t.id]?.liked?"currentColor":"none"}/></button><button className="icon play" aria-label={`${t.title} 재생 화면`} onClick={()=>selectTrack(i)}><Icon name="play" size={17}/></button></div>)}</div><div className="actions"><Btn variant="secondary" onClick={review}>곡에 반응 남기기</Btn></div><Notice>추천 목록은 서버에서 가져와요. 재생에는 직접 합성한 시연 음원을 사용해요.</Notice></>;
       case "player":return <Player queue={queue} index={index} onIndex={setIndex} onAction={setReaction} onReview={review}/>;
-      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡 · 이 시연에서는 곡이 끝나면 완청으로 표시돼요.</Notice><div className="actions"><Btn onClick={finishReaction}>감상 마치기</Btn><Btn variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
-      case "complete":return <><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>patch({response:x})}>{x}</Btn>)}<Btn disabled={!draft.response} onClick={prepareLP}>계속하기</Btn><button className="link" onClick={()=>{patch({response:NO_MOOD_RESPONSE});prepareLP();}}>건너뛰기</button></div></>;
+      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡</Notice><div className="actions"><Btn disabled={busy} onClick={finishReaction}>감상 마치기</Btn><Btn disabled={busy} variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
+      case "complete":return draft.askMood&&<><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>음악을 듣고 난 지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} disabled={busy} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>patch({response:x})}>{x}</Btn>)}<Btn disabled={busy||!draft.response} onClick={()=>submitMood(draft.response)}>계속하기</Btn><button className="link" disabled={busy} onClick={()=>submitMood(NO_MOOD_RESPONSE)}>건너뛰기</button></div></>;
       case "engrave":return <><Heading title="LP 새김 확인" desc={liked.length?"좋아요한 곡 중 LP판에 남길 곡을 골라주세요.":"좋아요한 곡이 없어요. 감정과 기록만 남길 수 있어요."}/><LP/>{liked.length>0&&<div className="surface mini-list">{liked.map(t=><label className="checkline" key={t.id}><input type="checkbox" checked={draft.engrave.includes(t.id)} onChange={e=>setDraft(d=>({...d,engrave:e.target.checked?[...d.engrave,t.id]:d.engrave.filter(id=>id!==t.id)}))}/>{t.title}</label>)}</div>}<Notice>서버에 기록을 저장하고 이 브라우저에서 날짜별로 볼 수 있어요.</Notice><div className="actions"><Btn disabled={!draft.engrave.length} onClick={()=>persist(draft.engrave,"engraved")}>LP판에 새기기</Btn><Btn variant="secondary" onClick={()=>persist([],"today")}>기록만 저장하기</Btn><button className="link" onClick={back}>돌아가기</button></div></>;
-      case "engraved":return <><Heading title="LP 새김 완료" desc={`${Object.values(todaysRecord?.tracks??{}).filter(t=>t.engraved).length}곡을 LP판에 담았어요.`}/><LP done/><div className="surface mini-list">{(todaysRecord?.trackIds??[]).filter(id=>todaysRecord?.tracks[id]?.engraved).map(id=><p key={id}><Icon name="check" size={16}/>{savedTrack(todaysRecord,id)?.title}</p>)}</div><div className="actions"><Btn onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;
+      case "engraved":return <><Heading title="LP 새김 완료" desc={`${Object.values(viewRecord?.tracks??{}).filter(t=>t.engraved).length}곡을 LP판에 담았어요.`}/><LP done/><div className="surface mini-list">{(viewRecord?.trackIds??[]).filter(id=>viewRecord?.tracks[id]?.engraved).map(id=><p key={id}><Icon name="check" size={16}/>{savedTrack(viewRecord,id)?.title}</p>)}</div><div className="actions"><Btn onClick={()=>goToday(viewDay||today)}>LP판 보기</Btn></div></>;
       case "today":return <><Heading title={viewDay&&viewDay!==today?"그날의 LP판":"오늘의 LP판"} desc={dateLabel(viewDay||today)}/>{viewRecord?<div className="surface daily-card"><div className="daily-top"><LP small/><div><Mood id={viewRecord.mood}/><p>{viewRecord.input||"감정만 기록했어요."}</p></div></div>{viewRecord.response&&<p className="daily-response">감상 후 기분 · {viewRecord.response}</p>}<h2>오늘의 추천 음악</h2>{(viewRecord.trackIds??[]).map(id=>{const t=savedTrack(viewRecord,id),s=viewRecord.tracks[id]??{};return t&&<div className="saved-track" key={id}><Cover theme={t.theme}/><div><strong>{t.title}</strong><small>{[s.liked&&"좋아요",s.skipped&&"건너뜀",s.completed&&"완청",s.engraved&&"새김"].filter(Boolean).join(" · ")||"반응 없음"}</small></div></div>;})}</div>:<div className="empty"><LP small/><strong>아직 저장한 기록이 없어요.</strong><p>기록을 마치면 여기에 LP판이 쌓여요.</p></div>}<div className="actions"><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 보기</Btn>{!viewRecord&&<Btn onClick={startNew}>오늘을 기록하기</Btn>}</div></>;
       case "history":return <><Heading title="날짜별 기록" desc="기억하고 싶은 날의 감정과 음악을 다시 만나요."/><MonthSelect month={month} onChange={setMonth}/>{thisMonth.length?<div className="cards">{thisMonth.map(r=><button key={r.day} className="history-row" onClick={()=>goToday(r.day)}><LP small/><span><strong>{dateLabel(r.day)}</strong><Mood id={r.mood}/><small>{savedTrack(r,(r.trackIds??[]).find(id=>r.tracks[id]?.engraved)??r.trackIds?.[0])?.title??"감정 기록"}</small></span><Icon name="next"/></button>)}</div>:<div className="empty"><p>이 달에는 저장한 기록이 없어요.</p></div>}<div className="actions"><Btn onClick={startNew}>오늘을 기록하기</Btn></div></>;
       case "me":return <><Heading title="마이페이지" desc="기록과 나에게 맞는 시작 화면을 관리해요."/><div className="surface"><h2>기록 보기</h2><div className="menu-list">{[["monthly-mood","월간 감정 분석"],["monthly-music","월간 음악 취향"],["daytype","Day Type"],["history","날짜별 기록"]].map(([to,label])=><button key={to} onClick={()=>go(to)}>{label}<Icon name="next" size={16}/></button>)}</div></div><div className="surface settings"><h2>기록 시작 버튼을 누르면</h2><label className="checkline"><input type="radio" name="entry" checked={entry==="record"} onChange={()=>savePref("record")}/> 기록 입력 먼저 보기</label><label className="checkline"><input type="radio" name="entry" checked={entry==="history"} onChange={()=>savePref("history")}/> 지난 기록 먼저 보기</label></div><div className="surface"><h2>이 브라우저의 기록</h2><p className="small">여기서 지우면 이 브라우저의 목록만 삭제돼요. 서버에 저장된 기록은 별도로 남아요.</p><button className="link danger" onClick={clearAll}>로컬 기록 모두 지우기</button></div><div className="actions"><Btn variant="secondary" onClick={()=>setDemo(!demo)}>{demo?"시연 메뉴 닫기":"시연 메뉴 보기"}</Btn></div>{demo&&<div className="surface demo-cases"><h2>테스트 시나리오</h2>{[["high","높은 확신"],["medium","중간 확신"],["low","낮은 확신"],["failure","분석 실패"],["risk","도움 안내"],["error","오류"]].map(([id,label])=><Btn key={id} variant="secondary" onClick={()=>demoCase(id)}>{label}</Btn>)}</div>}</>;

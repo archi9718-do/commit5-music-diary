@@ -5,7 +5,7 @@ import os
 import time
 
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 # 모델 폴더: 환경 변수 MOODWAVE_MODEL_DIR가 있으면 그 값을, 없으면 기본 폴더를 씁니다.
 DEFAULT_MODEL_DIR = r"C:\work\moodwave_data\models\klue-bert-base-sentiment"
@@ -57,8 +57,10 @@ def load_model():
                 "(MOODWAVE_MODEL_DIR 환경 변수나 download_model.py 실행 여부를 확인하세요)"
             )
         _device = "cuda" if torch.cuda.is_available() else "cpu"
-        _tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        _model = AutoModelForSequenceClassification.from_pretrained(model_dir).to(_device).eval()
+        _tokenizer = AutoTokenizer.from_pretrained(model_dir, local_files_only=True)
+        _model = AutoModelForSequenceClassification.from_pretrained(
+            model_dir, local_files_only=True,
+        ).to(_device).eval()
     return _tokenizer, _model, _device
 
 

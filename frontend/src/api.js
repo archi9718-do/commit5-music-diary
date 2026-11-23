@@ -15,12 +15,16 @@ export async function request(path, method = "GET", body) {
       body: JSON.stringify(body),
     }),
   });
-  const data = await response.json().catch(() => null);
+  const data = await response.json().catch(error => {
+    if (!(error instanceof SyntaxError)) throw error;
+    return null;
+  });
   if (!response.ok) {
     const error = new Error(typeof data?.detail === "string" ? data.detail : "서버 요청을 처리하지 못했어요.");
     error.status = response.status;
     throw error;
   }
+  if (!data || typeof data !== "object") throw new Error("서버 응답 형식이 올바르지 않아요.");
   return data;
 }
 

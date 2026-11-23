@@ -1,6 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {classify,recommend,nextTrackState,canReview,makeRecord,shiftMonth,localDay,forMonth,monthlyMood,monthlyMusic,dayType} from "../src/domain.js";
+import {classify,recommend,nextTrackState,canReview,hasCompletedPlayback,makeRecord,shiftMonth,localDay,forMonth,monthlyMood,monthlyMusic,dayType} from "../src/domain.js";
+
+test("재생 종료만으로 완청 처리하지 않고 실제 재생 구간을 확인한다",()=>{
+  const ranges=intervals=>({length:intervals.length,start:i=>intervals[i][0],end:i=>intervals[i][1]});
+  assert.equal(hasCompletedPlayback(ranges([[15.8,16]]),16),false);
+  assert.equal(hasCompletedPlayback(ranges([[0,8],[12,16]]),16),false);
+  assert.equal(hasCompletedPlayback(ranges([[0,15.9]]),16),true);
+  assert.equal(hasCompletedPlayback(ranges([]),0.2),false);
+  assert.equal(hasCompletedPlayback(ranges([[0,16]]),Infinity),false);
+});
 
 test("텍스트 분석은 높음·중간·낮음으로 구분한다",()=>{
   assert.deepEqual(classify("행복하고 뿌듯하고 즐거웠어요."),{kind:"high",candidates:["good"]});

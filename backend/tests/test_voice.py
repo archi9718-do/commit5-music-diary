@@ -54,6 +54,7 @@ def test_voice_returns_same_format_as_analyze(monkeypatch):
     (FakeSttService(), b"", 400),  # 빈 본문
     (FakeSttService(), b"0" * (main.MAX_AUDIO_BYTES + 1), 413),  # 3MB 초과
     (FakeSttService(text="  "), b"x", 422),  # 무음 → 빈 받아쓰기
+    (FakeSttService(text="가" * (main.MAX_RECORD_TEXT_LENGTH + 1)), b"x", 422),
     (FakeSttService(error=RuntimeError("GPU 오류")), b"x", 503),  # 모델 실행 오류
     (None, b"x", 503),  # 받아쓰기 패키지 없음
 ])
@@ -70,3 +71,31 @@ def test_voice_503_when_emotion_model_missing(monkeypatch):
     with TestClient(main.app) as client:
         assert post_voice(client).status_code == 503
         assert count_records() == 0
+
+
+@pytest.mark.parametrize("value", ["-1", "invalid"])
+def test_voice_bad_content_length_is_rejected(monkeypatch, value):
+    monkeypatch.setattr(main, "stt_service", FakeSttService())
+    with TestClient(main.app) as client:
+        assert client.post("/api/records/voice", content=b"audio", headers={"Content-Length": value}).status_code == 400
+        assert count_records() == 0
+
+
+def test_voice_checks_body_size_independently_of_header(monkeypatch):
+    monkeypatch.setattr(main, "stt_service", FakeSttService())
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/records/voice",
+            content=iter([b"a" * main.MAX_AUDIO_BYTES, b"b"]),
+            headers={"Content-Length": "1"},
+        )
+        assert response.status_code == 413
+        assert count_records() == 0
+
+
+def test_decode_error_does_not_expose_internal_details(monkeypatch):
+    monkeypatch.setattr(main, "stt_service", FakeSttService(error=ValueError("private decoder details")))
+    with TestClient(main.app) as client:
+        response = post_voice(client, b"invalid")
+        assert response.status_code == 400
+        assert "private decoder details" not in response.json()["detail"]

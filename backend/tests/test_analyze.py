@@ -125,13 +125,17 @@ def test_too_long_text_returns_422_even_without_model(monkeypatch):
         assert client.post("/api/records/analyze", json={"text": "가" * 2001}).status_code == 422
 
 
-def test_analyze_error_returns_503_and_saves_nothing(monkeypatch):
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+def test_analyze_error_returns_503_and_saves_nothing(monkeypatch, caplog, error_type):
     """모델 실행 중 오류: 아무것도 저장하지 않음."""
     monkeypatch.setattr(main, "emotion_service",
-                        FakeEmotionService(analyze_error=RuntimeError("GPU 오류")))
+                        FakeEmotionService(analyze_error=error_type("private model detail")))
     with TestClient(main.app) as client:
         before = count_records()
-        assert client.post("/api/records/analyze", json={"text": "테스트"}).status_code == 503
+        response = client.post("/api/records/analyze", json={"text": "테스트"})
+        assert response.status_code == 503
+        assert "private model detail" not in response.text
+        assert "private model detail" not in caplog.text
         assert count_records() == before
 
 

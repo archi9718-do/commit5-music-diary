@@ -1,21 +1,23 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Emotion = Literal["좋음", "무난함", "가라앉음", "예민함"]
 Confidence = Literal["높음", "중간", "낮음"]
+MoodAfter = Literal["조금 나아졌어요", "그대로예요", "더 무거워졌어요", "무응답"]
 EMOTIONS = ("좋음", "무난함", "가라앉음", "예민함")
+MAX_RECORD_TEXT_LENGTH = 2000
 
 
 class RecordCreate(BaseModel):
     # 사진만 기록하는 경우에도 확장할 수 있도록 빈 문자를 허용합니다.
-    text: str = Field(default="", max_length=2000)
+    text: str = Field(default="", max_length=MAX_RECORD_TEXT_LENGTH)
 
 
 class EmotionResult(BaseModel):
     """상현 -> 건호: 전달받은 JSON의 키를 그대로 사용합니다."""
     record_id: int = Field(gt=0)
-    text: str = Field(max_length=2000)
+    text: str = Field(max_length=MAX_RECORD_TEXT_LENGTH)
     probs: dict[str, float]
     emotion: Emotion
     confidence: Confidence
@@ -63,6 +65,28 @@ class SongFeedbackUpdate(BaseModel):
 
 class EngraveRequest(BaseModel):
     recommend_orders: list[Literal[1, 2, 3]] = Field(max_length=3)
+
+
+class MoodAfterUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mood_after: MoodAfter
+
+
+class MoodAfterState(BaseModel):
+    record_id: int
+    mood_asked_at: str | None
+    mood_after: MoodAfter | None
+
+
+class MoodQuestionState(MoodAfterState):
+    show_question: bool
+
+
+class PostListeningState(MoodAfterState):
+    flow_ended_at: str | None
+    completed_song_count: int
+    should_ask_mood: bool
 
 
 class SongFeedback(BaseModel):
