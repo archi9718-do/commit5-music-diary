@@ -1,6 +1,7 @@
 import React, {useEffect, useRef, useState} from "react";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
 import {request, moodId, analysisResult, lpTracks, lpStates, songState} from "./api.js";
+import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
 const PAGES={
   start:["시작","시작"],
@@ -16,23 +17,10 @@ const PAGES={
 const TABS=[["record","기록","note"],["history","내역","history"],["today","나의 LP","disc"],["me","마이","user"]];
 const STORE="moodwave.mvp.records.v1";
 const PREF="moodwave.mvp.entry.v1";
-const PENDING_LP="moodwave.mvp.pending-lp.v1";
 const MAX_RECORDING_SECONDS=10;
 const read=(key, fallback)=>{try{return JSON.parse(localStorage.getItem(key)??"null")??fallback;}catch{return fallback;}};
 const write=(key,data)=>{try{localStorage.setItem(key,JSON.stringify(data));return true;}catch{return false;}};
 const route=()=>{const key=location.hash.replace(/^#\/?/,"").split("?")[0];return Object.hasOwn(PAGES,key)?key:"start";};
-function readPendingLP(){
-  try{
-    const saved=JSON.parse(sessionStorage.getItem(PENDING_LP)??"null");
-    return Number.isSafeInteger(saved?.recordId)&&saved.recordId>0&&/^\d{4}-\d{2}-\d{2}$/.test(saved.day)?saved:null;
-  }catch{return null;}
-}
-function writePendingLP(value){
-  try{
-    if(value)sessionStorage.setItem(PENDING_LP,JSON.stringify(value));
-    else sessionStorage.removeItem(PENDING_LP);
-  }catch{}
-}
 const fresh=()=>({input:"",mood:null,mode:"text",response:"",askMood:false,tracks:{},engrave:[],queue:[],recordId:null,demo:false,replacing:false,saved:false});
 const emptyResult={kind:"low",candidates:[]};
 const savedTrack=(record,id)=>record?.queue?.find(track=>track.id===id)??getTrack(id);
@@ -124,7 +112,7 @@ function Voice({onAnalyze,onFail,onBack}){
 export default function App(){
   const [page,setPage]=useState(route),[navStack,setNavStack]=useState([]);
   const navigation=useRef({page,revision:0});
-  const [recovery,setRecovery]=useState(()=>["complete","engrave"].includes(route())?readPendingLP():null);
+  const [recovery,setRecovery]=useState(()=>["react","complete","engrave"].includes(route())?readPendingLP():null);
   const [recoveryError,setRecoveryError]=useState("");
   const [entry,setEntry]=useState(()=>read(PREF,"record")==="history"?"history":"record");
   const [records,setRecords]=useState(()=>{const a=read(STORE,[]);return Array.isArray(a)?a.filter(r=>r&&typeof r.day==="string"):[];});
@@ -133,6 +121,7 @@ export default function App(){
   const [month,setMonth]=useState(()=>localDay().slice(0,7)),[viewDay,setViewDay]=useState(""),[demo,setDemo]=useState(false);
   const pending=useRef(false), reactions=useRef(Promise.resolve()), reactionStates=useRef({});
   const unsavedCompletions=useRef(new Set());
+  const [completionSaveFailed,setCompletionSaveFailed]=useState(false);
   const [busy,setBusy]=useState(false);
   const main=useRef(null),today=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Seoul"}).format(new Date());
   const queue=draft.queue,count=queue.filter(t=>draft.tracks[t.id]?.completed).length;
@@ -184,24 +173,23 @@ export default function App(){
     if(!recovery)return;
     const isCurrent=activeView();
     let active=true;
-    request(`/records/${recovery.recordId}/lp`).then(lp=>{
+    const path=`/records/${recovery.recordId}`;
+    Promise.all([request(`${path}/lp`),request(`${path}/post-listening`)]).then(([lp,state])=>{
       if(!active||!isCurrent())return;
       const mood=moodId(lp.confirmed_emotion);
-      if(!mood){
+      if(!mood||(!state.mood_asked_at&&state.mood_after==null)){
         writePendingLP(null);
         setRecovery(null);
         return;
       }
-      if(lp.mood_after==null){
-        setRecoveryError("서버에서 저장된 응답을 아직 확인하지 못했어요.");
-        return;
-      }
+      const destination=moodDestination(state);
       const queue=lpTracks(lp.songs,mood), tracks=lpStates(lp.songs);
       reactionStates.current=tracks;
       setDraft({...fresh(),day:recovery.day,recordId:recovery.recordId,input:lp.text,mood,queue,tracks,
-        response:lp.mood_after,engrave:queue.filter(track=>tracks[track.id]?.liked).map(track=>track.id)});
+        response:state.mood_after??recovery.response??"",askMood:destination==="complete",
+        engrave:queue.filter(track=>tracks[track.id]?.liked).map(track=>track.id)});
       setRecovery(null);
-      go("engrave",false);
+      go(destination,false);
     }).catch(error=>{
       if(!active||!isCurrent())return;
       if(error.status===404){
@@ -213,24 +201,15 @@ export default function App(){
   },[recovery]);
 
   useEffect(()=>{
-    if(recovery&&!["complete","engrave"].includes(page))setRecovery(null);
+    if(recovery&&!["react","complete","engrave"].includes(page))setRecovery(null);
   },[page,recovery]);
 
   async function run(work,onError){
-    if(pending.current)return;
-    pending.current=true;
-    setBusy(true);
-    try{
-      await reactions.current;
-      await work();
-    }catch(error){
+    return runAfterReactions(pending,reactions,work,error=>{
       const message=error.name==="TimeoutError"?"서버 응답이 늦어지고 있어요. 다시 시도해주세요."
         :error instanceof TypeError?"서버에 연결할 수 없어요. 백엔드 실행 상태를 확인해주세요.":error.message;
       onError(message);
-    }finally{
-      pending.current=false;
-      setBusy(false);
-    }
+    },setBusy);
   }
   const confirmReplacement=()=>draft.replacing||!todaysRecord||window.confirm("오늘 저장한 기록을 지금 내용으로 바꿀까요?");
 
@@ -265,7 +244,7 @@ export default function App(){
   }
   function setReaction(id,action){
     if(pending.current)return;
-    if(action==="finish")unsavedCompletions.current.add(id);
+    if(action==="finish"&&!queueCompletion(unsavedCompletions.current,id,reactionStates.current[id]?.completed))return;
     reactions.current=reactions.current.then(()=>action==="finish"?saveCompletion(id):saveReaction(id,action))
       .catch(()=>setFlash(action==="finish"?"완청 기록을 저장하지 못했어요. 감상 마치기를 누르면 다시 저장해요.":"곡 반응을 저장하지 못했어요. 다시 시도해주세요."));
   }
@@ -320,6 +299,7 @@ export default function App(){
       }
       reactionStates.current=tracks;
       unsavedCompletions.current.clear();
+      setCompletionSaveFailed(false);
       if(!draft.demo)writePendingLP(null);
       patch({mood:id,queue:songs,tracks,response:"",askMood:false,engrave:[]});
       setIndex(0);
@@ -382,7 +362,10 @@ export default function App(){
       go(next);
     },setFlash);
   }
-  function finishReaction(){
+  function rememberMood(response){
+    writePendingLP({recordId:draft.recordId,day:draft.day??today,response});
+  }
+  function finishReaction(continueWithSaved=false){
     const isCurrent=activeView();
     return run(async()=>{
       if(!isCurrent())return;
@@ -393,29 +376,45 @@ export default function App(){
         }else prepareLP("");
         return;
       }
-      for(const id of unsavedCompletions.current){
-        await saveCompletion(id);
+      // run이 기존 곡별 PATCH를 모두 기다린 뒤에만 실패한 완청을 다시 보냅니다.
+      if(!continueWithSaved){
+        await retryCompletions(unsavedCompletions.current,saveCompletion,isCurrent);
         if(!isCurrent())return;
+        if(unsavedCompletions.current.size){
+          setCompletionSaveFailed(true);
+          setFlash("일부 완청 기록을 저장하지 못했어요.");
+          return;
+        }
       }
       const path=`/records/${draft.recordId}`;
       const state=await request(`${path}/flow/end`,"POST");
       if(!isCurrent())return;
-      if(!state.should_ask_mood){prepareLP(state.mood_after??"");return;}
-      let question;
-      try{
-        question=await request(`${path}/mood-question`,"POST");
-      }catch(error){
-        if(!isCurrent())return;
-        if(error.status!==409)throw error;
-        const latest=await request(`${path}/post-listening`);
-        if(isCurrent())prepareLP(latest.mood_after??"");
-        return;
+      const lp=await request(`${path}/lp`);
+      if(!isCurrent())return;
+      reactionStates.current=lpStates(lp.songs);
+      patch({tracks:reactionStates.current});
+      let question=state;
+      if(state.should_ask_mood){
+        try{
+          question=await request(`${path}/mood-question`,"POST");
+        }catch(error){
+          if(!isCurrent())return;
+          if(error.status!==409)throw error;
+          question=await request(`${path}/post-listening`);
+        }
       }
       if(!isCurrent())return;
-      if(question.show_question){
-        patch({askMood:true,response:""});
+      setCompletionSaveFailed(false);
+      if(moodDestination(question)==="complete"){
+        const previous=readPendingLP();
+        const response=previous?.recordId===draft.recordId?previous.response??"":"";
+        rememberMood(response);
+        patch({askMood:true,response});
         go("complete");
-      }else prepareLP(question.mood_after??"");
+      }else{
+        if(question.mood_after!=null)rememberMood(question.mood_after);
+        prepareLP(question.mood_after??"");
+      }
     },message=>{if(isCurrent())setFlash(message);});
   }
   function submitMood(response){
@@ -425,16 +424,9 @@ export default function App(){
     return run(async()=>{
       if(!isCurrent())return;
       const path=`/records/${draft.recordId}`;
-      writePendingLP({recordId:draft.recordId,day:draft.day??today});
-      let saved;
-      try{
-        saved=await request(`${path}/mood-after`,"PATCH",{mood_after:response});
-      }catch(error){
-        if(error.status!==409)throw error;
-        saved=await request(`${path}/post-listening`);
-        if(saved.mood_after===null)throw error;
-        if(isCurrent())setFlash("이미 서버에 저장된 감상 후 기분을 불러왔어요.");
-      }
+      rememberMood(response);
+      patch({response});
+      const saved=await saveMoodAnswer(request,path,response);
       if(isCurrent())prepareLP(saved.mood_after);
     },message=>{if(isCurrent())setFlash(message);});
   }
@@ -447,6 +439,10 @@ export default function App(){
   }
   useEffect(()=>{
     if(recovery)return;
+    if(page==="complete"&&!draft.askMood){
+      const saved=readPendingLP();
+      if(saved){setRecoveryError("");setRecovery(saved);return;}
+    }
     if(["recommend","player","react","complete","engrave"].includes(page)&&!draft.mood)go("record",false);
     if(page==="voice"&&!agreed)go("consent",false);
     if(page==="complete"&&draft.mood&&!draft.askMood)go("react",false);
@@ -461,11 +457,11 @@ export default function App(){
   const optionalVoice=()=>{patch({mode:"voice"});go(agreed?"voice":"consent");};
 
   function screen(){
-    if(recovery&&["complete","engrave"].includes(page))return <>
+    if(recovery&&["react","complete","engrave"].includes(page))return <>
       <Heading title="저장한 감상 후 기분 불러오기"/>
       {recoveryError?<><Notice>{recoveryError}</Notice><div className="actions">
         <Btn onClick={()=>{setRecoveryError("");setRecovery({...recovery});}}>다시 시도</Btn>
-        <Btn variant="secondary" onClick={startNew}>기록 화면으로 돌아가기</Btn>
+        <Btn variant="secondary" onClick={()=>{setRecovery(null);go("record",false);}}>기록 화면으로 돌아가기</Btn>
       </div></>
         :<p role="status">서버에서 LP 기록을 확인하고 있어요.</p>}
     </>;
@@ -481,8 +477,12 @@ export default function App(){
       case "low":case "manual":return <><Heading title={PAGES[page][0]} desc={page==="low"?"기록만으로는 판단하기 어려워요. 가까운 감정을 골라주세요.":"지금 마음에 가까운 감정을 하나 골라주세요."}/><LP/><MoodSelect active={pick} onPick={id=>page==="low"?accept(id):setPick(id)}/>{page==="manual"&&<div className="actions"><Btn disabled={!pick} onClick={()=>accept(pick)}>선택 완료</Btn></div>}</>;
       case "recommend":return <><Heading title="오늘의 추천 음악" desc="확정한 감정에 맞춰 세 곡을 골랐어요."/><div className="center mood-row"><span>확정 감정</span><Mood id={draft.mood}/></div><div className="cards">{queue.map((t,i)=><div key={t.id} className="track-card"><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>{t.artist}</small><p>{t.reason}</p></div><button className={`icon queue-like ${draft.tracks[t.id]?.liked?"liked":""}`} aria-label={`${t.title} ${draft.tracks[t.id]?.liked?"좋아요 취소":"좋아요"}`} aria-pressed={!!draft.tracks[t.id]?.liked} onClick={()=>setReaction(t.id,"like")}><Icon name="heart" size={17} fill={draft.tracks[t.id]?.liked?"currentColor":"none"}/></button><button className="icon play" aria-label={`${t.title} 재생 화면`} onClick={()=>selectTrack(i)}><Icon name="play" size={17}/></button></div>)}</div><div className="actions"><Btn variant="secondary" onClick={review}>곡에 반응 남기기</Btn></div><Notice>추천 목록은 서버에서 가져와요. 재생에는 직접 합성한 시연 음원을 사용해요.</Notice></>;
       case "player":return <Player queue={queue} index={index} onIndex={setIndex} onAction={setReaction} onReview={review}/>;
-      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡</Notice><div className="actions"><Btn disabled={busy} onClick={finishReaction}>감상 마치기</Btn><Btn disabled={busy} variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
-      case "complete":return draft.askMood&&<><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>음악을 듣고 난 지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} disabled={busy} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>patch({response:x})}>{x}</Btn>)}<Btn disabled={busy||!draft.response} onClick={()=>submitMood(draft.response)}>계속하기</Btn><button className="link" disabled={busy} onClick={()=>submitMood(NO_MOOD_RESPONSE)}>건너뛰기</button></div></>;
+      case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡</Notice>
+        {completionSaveFailed&&<Notice>일부 완청을 저장하지 못했어요. 다시 시도하거나 저장된 기록으로 계속할 수 있어요.</Notice>}
+        <div className="actions"><Btn disabled={busy} onClick={()=>finishReaction()}>{completionSaveFailed?"완청 저장 다시 시도":"감상 마치기"}</Btn>
+          {completionSaveFailed&&<Btn disabled={busy} variant="secondary" onClick={()=>finishReaction(true)}>저장된 기록으로 계속</Btn>}
+          <Btn disabled={busy} variant="secondary" onClick={()=>go("recommend")}>추천곡으로 돌아가기</Btn></div></>;
+      case "complete":return draft.askMood&&<><Heading title="감상 완료"/><LP done/><p className="counter">{count}곡 감상 완료</p><div className="heading compact"><h2>음악을 듣고 난 지금 기분은 어떤가요?</h2></div><div className="actions">{RESPONSES.map(x=><Btn key={x} disabled={busy} variant={draft.response===x?"primary":"secondary"} aria-pressed={draft.response===x} onClick={()=>{if(!draft.demo)rememberMood(x);patch({response:x});}}>{x}</Btn>)}<Btn disabled={busy||!draft.response} onClick={()=>submitMood(draft.response)}>계속하기</Btn><button className="link" disabled={busy} onClick={()=>submitMood(NO_MOOD_RESPONSE)}>건너뛰기</button></div></>;
       case "engrave":return <><Heading title="LP 새김 확인" desc={liked.length?"좋아요한 곡 중 LP판에 남길 곡을 골라주세요.":"좋아요한 곡이 없어요. 감정과 기록만 남길 수 있어요."}/><LP/>{liked.length>0&&<div className="surface mini-list">{liked.map(t=><label className="checkline" key={t.id}><input type="checkbox" checked={draft.engrave.includes(t.id)} onChange={e=>setDraft(d=>({...d,engrave:e.target.checked?[...d.engrave,t.id]:d.engrave.filter(id=>id!==t.id)}))}/>{t.title}</label>)}</div>}<Notice>서버에 기록을 저장하고 이 브라우저에서 날짜별로 볼 수 있어요.</Notice><div className="actions"><Btn disabled={!draft.engrave.length} onClick={()=>persist(draft.engrave,"engraved")}>LP판에 새기기</Btn><Btn variant="secondary" onClick={()=>persist([],"today")}>기록만 저장하기</Btn><button className="link" onClick={back}>돌아가기</button></div></>;
       case "engraved":return <><Heading title="LP 새김 완료" desc={`${Object.values(viewRecord?.tracks??{}).filter(t=>t.engraved).length}곡을 LP판에 담았어요.`}/><LP done/><div className="surface mini-list">{(viewRecord?.trackIds??[]).filter(id=>viewRecord?.tracks[id]?.engraved).map(id=><p key={id}><Icon name="check" size={16}/>{savedTrack(viewRecord,id)?.title}</p>)}</div><div className="actions"><Btn onClick={()=>goToday(viewDay||today)}>LP판 보기</Btn></div></>;
       case "today":return <><Heading title={viewDay&&viewDay!==today?"그날의 LP판":"오늘의 LP판"} desc={dateLabel(viewDay||today)}/>{viewRecord?<div className="surface daily-card"><div className="daily-top"><LP small/><div><Mood id={viewRecord.mood}/><p>{viewRecord.input||"감정만 기록했어요."}</p></div></div>{viewRecord.response&&<p className="daily-response">감상 후 기분 · {viewRecord.response}</p>}<h2>오늘의 추천 음악</h2>{(viewRecord.trackIds??[]).map(id=>{const t=savedTrack(viewRecord,id),s=viewRecord.tracks[id]??{};return t&&<div className="saved-track" key={id}><Cover theme={t.theme}/><div><strong>{t.title}</strong><small>{[s.liked&&"좋아요",s.skipped&&"건너뜀",s.completed&&"완청",s.engraved&&"새김"].filter(Boolean).join(" · ")||"반응 없음"}</small></div></div>;})}</div>:<div className="empty"><LP small/><strong>아직 저장한 기록이 없어요.</strong><p>기록을 마치면 여기에 LP판이 쌓여요.</p></div>}<div className="actions"><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 보기</Btn>{!viewRecord&&<Btn onClick={startNew}>오늘을 기록하기</Btn>}</div></>;
@@ -501,12 +501,16 @@ export default function App(){
     }
   }
   const noTabs=["start","login","signup","risk"].includes(page);
+  const pendingMood=!draft.demo&&!recovery&&["record","history","today"].includes(page)?readPendingLP():null;
   const active=page==="today"||page==="engrave"||page==="engraved"?"today":page==="history"?"history":PAGES[page]?.[1]==="나의 기록"?"me":"record";
   return <div className="layout">
     <aside className="desktop-intro" aria-hidden="true"><span className="series">MOODWAVE / LOCAL DEMO</span><h2>한 장의 LP판에<br/>남기는 하루.</h2><p>감정 기록에서 음악 감상까지, 오늘의 마음을 다시 들여다보는 작은 공간.</p><LP/></aside>
     <div className="phone">
       <header className="header"><div className="header-side">{page!=="start"&&<button className="icon back" aria-label="이전 화면" onClick={back}><Icon name="back"/></button>}</div><button className="brand" onClick={()=>{if(!pending.current)go("start");}} aria-label="MOOD WAVE 시작 화면">MOOD WAVE<i/></button><div className="header-side right"><span className="demo-pill">DEMO</span></div></header>
-      <main ref={main} className={`screen page-${page}`} inert={busy?"":undefined} aria-busy={busy}>{screen()}</main>
+      <main ref={main} className={`screen page-${page}`} inert={busy?"":undefined} aria-busy={busy}>
+        {pendingMood&&<Btn variant="secondary" onClick={()=>{setRecoveryError("");setRecovery(pendingMood);go("complete");}}>감상 후 기록 이어서 하기</Btn>}
+        {screen()}
+      </main>
       {!noTabs&&<nav className="bottom-nav" aria-label="주 메뉴">{TABS.map(([id,label,ico])=><button key={id} aria-current={active===id?"page":undefined} onClick={()=>{if(!pending.current)(id==="today"?goToday():go(id));}}><Icon name={ico}/><span>{label}</span></button>)}</nav>}
       {flash&&<div className="toast" role="status">{flash}</div>}
     </div>

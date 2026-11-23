@@ -136,6 +136,7 @@ def test_analyze_error_returns_503_and_saves_nothing(monkeypatch, caplog, error_
         assert response.status_code == 503
         assert "private model detail" not in response.text
         assert "private model detail" not in caplog.text
+        assert "test_analyze.py:" in caplog.text
         assert count_records() == before
 
 

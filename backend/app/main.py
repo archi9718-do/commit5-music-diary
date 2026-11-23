@@ -1,8 +1,9 @@
 import json
 import logging
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from traceback import extract_tb
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi import Path as PathParam
@@ -12,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
 from .post_listening import router as post_listening_router
-from .recommender import ScoreDataError, recommend_three
+from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
     MAX_RECORD_TEXT_LENGTH,
     EmotionResult,
@@ -153,6 +154,13 @@ def _check_emotion_ready() -> None:
         )
 
 
+def _log_model_failure(label: str, exc: Exception) -> None:
+    # 원문과 예외 메시지 대신 파일명·줄 번호만 기록해 실패 지점을 추적합니다.
+    frames = extract_tb(exc.__traceback__)[-4:]
+    locations = " <- ".join(f"{Path(frame.filename).name}:{frame.lineno}" for frame in reversed(frames))
+    logger.warning("%s 실패: %s [%s]", label, type(exc).__name__, locations)
+
+
 def _analyze_and_save(text: str) -> EmotionResult:
     """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
     _check_emotion_ready()
@@ -161,7 +169,7 @@ def _analyze_and_save(text: str) -> EmotionResult:
     try:
         result = emotion_service.analyze_text(text, record_id=None)
     except Exception as exc:  # 모델 실행 중 오류
-        logger.warning("감정 분석 실패: %s", type(exc).__name__)
+        _log_model_failure("감정 분석", exc)
         raise HTTPException(status_code=503, detail="감정 분석 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
 
     # 2) 결과 양식 검사: /api/emotions와 같은 규칙(schemas.EmotionResult)으로 확인
@@ -233,7 +241,7 @@ def _voice_to_result(audio: bytes) -> EmotionResult:
     except ValueError as exc:  # 읽을 수 없는 녹음 파일
         raise HTTPException(status_code=400, detail="녹음 파일을 읽지 못했습니다. 다시 녹음해 주세요.") from exc
     except Exception as exc:  # 모델 실행 중 오류
-        logger.warning("받아쓰기 실패: %s", type(exc).__name__)
+        _log_model_failure("받아쓰기", exc)
         raise HTTPException(status_code=503, detail="받아쓰기 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
 
     # STT의 무음 검사에서 반환한 빈 문자열은 감정 분석·저장 전에 거절합니다.
@@ -268,13 +276,23 @@ def save_emotion_result(payload: EmotionResult):
 def create_recommendations(payload: RecommendationRequest):
     """확정 감정으로 3곡을 추천하고 결과를 DB에 저장합니다."""
     try:
-        songs = recommend_three(payload.confirmed_emotion)
-    except ScoreDataError as exc:
-        # 서버 내부의 파일 경로를 사용자에게 노출하지 않습니다.
-        raise HTTPException(status_code=503, detail="음악 점수 데이터가 준비되지 않았습니다. 서버 설정을 확인하세요.") from exc
-    con = connect()
-    try:
-        with con:
+        candidates = load_recommendation_candidates()
+        with closing(connect()) as con, con:
+            con.execute("BEGIN IMMEDIATE")
+            recent_songs = con.execute(
+                """SELECT DISTINCT rs.song_id
+                   FROM tb_record AS target
+                   JOIN tb_record AS prior
+                     ON prior.user_id = target.user_id
+                    AND prior.record_date >= date(target.record_date, '-7 days')
+                    AND prior.record_date < target.record_date
+                   JOIN tb_record_song AS rs ON rs.record_id = prior.record_id
+                   WHERE target.record_id = ?""",
+                (payload.record_id,),
+            )
+            songs = recommend_three(
+                payload.confirmed_emotion, {row["song_id"] for row in recent_songs}, candidates=candidates,
+            )
             # 새 추천 = 새 3곡 흐름 시작이므로 흐름 종료 일시도 비웁니다.
             cursor = con.execute(
                 "UPDATE tb_record SET emotion_final = ?, flow_ended_at = NULL WHERE record_id = ?",
@@ -292,8 +310,9 @@ def create_recommendations(payload: RecommendationRequest):
                 [(payload.record_id, i, song.song_id, song.step, song.brightness, song.energy)
                  for i, song in enumerate(songs, start=1)],
             )
-    finally:
-        con.close()
+    except ScoreDataError as exc:
+        # 서버 내부의 파일 경로를 사용자에게 노출하지 않습니다.
+        raise HTTPException(status_code=503, detail="음악 점수 데이터가 준비되지 않았습니다. 서버 설정을 확인하세요.") from exc
     return {"songs": songs}
 
 

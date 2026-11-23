@@ -59,7 +59,8 @@ export function hasCompletedPlayback(played, duration) {
   let listened = 0;
   // played는 브라우저가 합쳐서 제공하는 재생 구간입니다. 앞으로 넘긴 구간은 포함되지 않습니다.
   for (let i = 0; i < played.length; i++) listened += played.end(i) - played.start(i);
-  return listened > 0 && duration - listened <= 0.25;
+  const tolerance = Math.min(0.75, duration * 0.03);
+  return listened > 0 && duration - listened <= tolerance;
 }
 export function nextTrackState(previous={}, action) {
   if (action==="like") return previous.liked
