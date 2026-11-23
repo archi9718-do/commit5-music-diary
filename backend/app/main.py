@@ -1,7 +1,7 @@
 import json
 import logging
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
-from .recommender import ScoreDataError, recommend_three
+from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
     EmotionResult,
     EngraveRequest,
@@ -258,13 +258,23 @@ def save_emotion_result(payload: EmotionResult):
 def create_recommendations(payload: RecommendationRequest):
     """확정 감정으로 3곡을 추천하고 결과를 DB에 저장합니다."""
     try:
-        songs = recommend_three(payload.confirmed_emotion)
-    except ScoreDataError as exc:
-        # 서버 내부의 파일 경로를 사용자에게 노출하지 않습니다.
-        raise HTTPException(status_code=503, detail="음악 점수 데이터가 준비되지 않았습니다. 서버 설정을 확인하세요.") from exc
-    con = connect()
-    try:
-        with con:
+        candidates = load_recommendation_candidates()
+        with closing(connect()) as con, con:
+            con.execute("BEGIN IMMEDIATE")
+            recent_songs = con.execute(
+                """SELECT DISTINCT rs.song_id
+                   FROM tb_record AS target
+                   JOIN tb_record AS prior
+                     ON prior.user_id = target.user_id
+                    AND prior.record_date >= date(target.record_date, '-7 days')
+                    AND prior.record_date < target.record_date
+                   JOIN tb_record_song AS rs ON rs.record_id = prior.record_id
+                   WHERE target.record_id = ?""",
+                (payload.record_id,),
+            )
+            songs = recommend_three(
+                payload.confirmed_emotion, {row["song_id"] for row in recent_songs}, candidates=candidates,
+            )
             # 새 추천 = 새 3곡 흐름 시작이므로 흐름 종료 일시도 비웁니다.
             cursor = con.execute(
                 "UPDATE tb_record SET emotion_final = ?, flow_ended_at = NULL WHERE record_id = ?",
@@ -282,8 +292,9 @@ def create_recommendations(payload: RecommendationRequest):
                 [(payload.record_id, i, song.song_id, song.step, song.brightness, song.energy)
                  for i, song in enumerate(songs, start=1)],
             )
-    finally:
-        con.close()
+    except ScoreDataError as exc:
+        # 서버 내부의 파일 경로를 사용자에게 노출하지 않습니다.
+        raise HTTPException(status_code=503, detail="음악 점수 데이터가 준비되지 않았습니다. 서버 설정을 확인하세요.") from exc
     return {"songs": songs}
 
 
