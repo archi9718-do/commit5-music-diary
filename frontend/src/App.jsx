@@ -99,7 +99,7 @@ function Voice({onAnalyze,onFail,onBack}){
   };
   return <><Heading title="음성 녹음" desc={`최대 ${MAX_RECORDING_SECONDS}초 동안 말해볼 수 있어요.`}/><div className={`mic-stage ${status==="recording"?"live":""}`}><Icon name="mic" size={38}/><strong aria-live="polite">0:{String(seconds).padStart(2,"0")}</strong><span>{status==="recording"?"녹음 중":status==="done"?"녹음 종료 · 원본 미저장":"녹음 대기"}</span></div>
   <Notice>녹음은 받아쓰기를 위해 서버로 한 번 보내요. 서버는 받아쓴 글만 저장하고 원본 음성은 저장하지 않아요.</Notice>
-  <div className="actions">{status==="recording"?<Btn onClick={stop}>녹음 종료</Btn>:status==="done"?<><Btn onClick={()=>{const blob=new Blob(chunks.current,{type:chunks.current[0]?.type||"audio/webm"});chunks.current=[];onAnalyze(blob);}}>기록 완료</Btn><Btn variant="secondary" disabled={busy} onClick={start}>다시 녹음하기</Btn></>:<Btn disabled={busy} onClick={start}>{busy?"권한 확인 중":"녹음 시작"}</Btn>}<button className="link" onClick={onBack}>글로 기록하기</button></div></>;
+  <div className="actions">{status==="recording"?<Btn onClick={stop}>녹음 종료</Btn>:status==="done"?<><Btn onClick={()=>{const blob=new Blob(chunks.current,{type:chunks.current[0]?.type||"audio/webm"});chunks.current=[];if(onAnalyze(blob)===false){setStatus("idle");setSeconds(0);}}}>기록 완료</Btn><Btn variant="secondary" disabled={busy} onClick={start}>다시 녹음하기</Btn></>:<Btn disabled={busy} onClick={start}>{busy?"권한 확인 중":"녹음 시작"}</Btn>}<button className="link" onClick={onBack}>글로 기록하기</button></div></>;
 }
 
 export default function App(){
@@ -251,7 +251,7 @@ export default function App(){
   function failed(text){setMessage(text);go("failure");}
   // 녹음 → 서버 받아쓰기 + 감정 분석 + 저장 (POST /records/voice). 응답 형식은 /records/analyze와 같음
   function analyzeVoice(blob){
-    if(pending.current||!confirmReplacement())return;
+    if(pending.current||!confirmReplacement())return false; // 보내지 않음 → 녹음 화면이 이번 녹음을 버리고 대기로
     setPick(null);
     go("loading");
     return run(async()=>{
