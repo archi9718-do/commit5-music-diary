@@ -34,3 +34,7 @@ raw_data/
 models/
 hf_cache/
 *.bin
+
+# Node / 프론트 빌드 결과
+node_modules/
+dist/
