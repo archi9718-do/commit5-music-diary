@@ -24,7 +24,7 @@ from ai.agent.service import write_reasons
 from app.recommender import TARGETS  # 추천과 같은 단계 이름·좌표를 씀
 
 PRICE_PER_MTOK = {"input_tokens": 4.0, "output_tokens": 20.0}  # claude-opus-5-5, US$
-ESTIMATE_PER_RUN_USD = 0.04  # ponytail: 11/24 실제 호출 2번을 본 대략값. 첫 측정 뒤 결과의 cost_usd로 바꾸기
+ESTIMATE_PER_RUN_USD = 0.02  # 11/24 측정: 24회 $0.435 (1회 약 $0.018)
 EMOTIONS = ("좋음", "무난함", "가라앉음", "예민함")
 RISK_FIXTURE = REPO_ROOT / "backend" / "tests" / "fixtures" / "risk_sentences.json"
 OUT_DIR = Path(os.environ.get("MOODWAVE_AGENT_EVAL_DIR", r"C:\work\moodwave_data\agent_eval"))
