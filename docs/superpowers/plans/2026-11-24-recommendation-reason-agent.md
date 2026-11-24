@@ -37,7 +37,7 @@
 
 ---
 
-### 작업 1: 규칙 — 위험 표현·템플릿·검사기 (스펙 7.3~7.5절)
+### Task 1: 규칙 — 위험 표현·템플릿·검사기 (스펙 7.3~7.5절)
 
 **Files:**
 - Create: `ai/agent/__init__.py` (빈 파일), `ai/agent/rules.py`
@@ -127,7 +127,7 @@ def test_recent_word_ok_when_history_exists():
 - [ ] **Step 6: 통과 확인** — `pytest -q`, `npm test` 전체 통과. 프론트 시험이 실패하면 묶음의 `risk` 값이 아니라 어느 쪽 정규식이 다른지 본다
 - [ ] **Step 7: 커밋** — `feat: 추천 이유 검사기·템플릿·위험 표현 규칙`
 
-### 작업 2: 에이전트 — 도구 반복과 호출 (스펙 7.1, 7.2, 7.6절)
+### Task 2: 에이전트 — 도구 반복과 호출 (스펙 7.1, 7.2, 7.6절)
 
 **Files:**
 - Create: `ai/agent/service.py`
@@ -207,7 +207,7 @@ def test_unknown_tool_name_returns_error_result_not_crash(): ...
 - [ ] **Step 5: 통과 확인** — `pytest -q`
 - [ ] **Step 6: 커밋** — `feat: 추천 이유 에이전트 (도구 3개, 최대 4번)`
 
-### 작업 3: 서버 경로 (스펙 6절)
+### Task 3: 서버 경로 (스펙 6절)
 
 **Files:**
 - Create: `backend/app/reasons.py` (라우터, `post_listening.py`와 같은 모양)
@@ -252,7 +252,7 @@ def test_agent_exception_still_200_template(client, recommended): ...
 - [ ] **Step 5: API_CONTRACT.md** — 스펙 6절의 요청·응답, 404·409, `source`·`risk` 뜻, "결과는 DB에 저장하지 않음", `song_id` 추가 이유
 - [ ] **Step 6: 커밋** — `feat: POST /api/records/{id}/reasons 추천 이유 경로`
 
-### 작업 4: 화면 연결 (스펙 8절)
+### Task 4: 화면 연결 (스펙 8절)
 
 **Files:**
 - Modify: `frontend/src/api.js` (`applyReasons` 추가)
@@ -283,7 +283,7 @@ test("그사이 곡이 바뀌었으면 버린다",()=>assert.equal(applyReasons(
 - [ ] **Step 5: 손 확인** — 서버(`MOODWAVE_SCORES_CSV` 설정, 키 있음)·화면을 켜고 기록 → 감정 확인 → 추천 화면이 단계 이름으로 바로 뜨고 몇 초 뒤 이유 문장으로 바뀜. 키 없이(`$env:ANTHROPIC_API_KEY=""`로 켠 서버) 다시 → 곧바로 템플릿 문장으로 바뀜. 네트워크 탭에서 `/reasons` 응답의 `source` 확인
 - [ ] **Step 6: 커밋** — `feat: 추천 화면에 에이전트 이유 반영`
 
-### 작업 5: 평가 스크립트와 README (스펙 9절)
+### Task 5: 평가 스크립트와 README (스펙 9절)
 
 **Files:**
 - Create: `ai/agent/eval.py`
