@@ -128,3 +128,19 @@ def test_templates_pass_direction_check_on_ordered_flows(emotion, steps, songs):
     texts = template_reasons(emotion, steps)
     reasons = [{"recommend_order": i, "text": t} for i, t in enumerate(texts, 1)]
     assert check_reasons(reasons, emotion, False, songs=songs) == (texts, [])
+
+
+@pytest.mark.parametrize(("second", "code", "songs"), [
+    ("앞 곡보다 살짝 덜 밝은 곡으로 이어가요.", "direction:밝기", UP),  # UP은 밝기가 오름
+    ("앞 곡보다 한결 차분해진 곡으로 이어가요.", "direction:에너지", UP),  # UP은 에너지가 오름
+    ("앞 곡보다 차분해지며 천천히 이어가요.", "direction:에너지", UP),
+    ("앞 곡보다 덜 활기찬 곡으로 이어가요.", "direction:에너지", UP),
+])
+def test_softer_comparatives_are_checked(second, code, songs):
+    reasons = lines(FIRST, second, "한층 더 밝은 곡으로 오늘을 마무리해요.")
+    assert code in check_reasons(reasons, "가라앉음", False, songs=songs)[1]
+
+
+def test_softer_comparatives_matching_scores_pass():
+    reasons = lines(FIRST, "앞 곡보다 살짝 덜 밝고 한결 차분해진 곡이에요.", "잔잔한 흐름으로 오늘을 마무리해요.")
+    assert check_reasons(reasons, "가라앉음", False, songs=DOWN)[1] == []
