@@ -18,6 +18,9 @@ AUDIO_SCHEMA_PATH = SCHEMA_PATH.with_name("audio_schema.sql")
 # 로그인이 붙으면 get_demo_user_id() 대신 로그인한 회원의 user_id를 넘기면 됩니다.
 DEMO_USER_EMAIL = "demo@moodwave.local"
 DEMO_PASSWORD_HASH = "login-not-implemented"
+# 12/7 평가: 시연 기기 한 대를 돌려 쓰므로 화면이 만든 4자리 참여자 코드(X-Participant 헤더)마다 회원을 나눕니다.
+# 참여자 코드는 인증이 아닙니다(헤더는 바꿀 수 있음). 참여자끼리 기록이 섞이지 않게 하는 용도입니다.
+PARTICIPANT_PATTERN = r"^[A-Z0-9]{4}$"
 
 # 기록 날짜는 한국 날짜로 정합니다. (SQLite CURRENT_TIMESTAMP는 UTC라서 쓰지 않음)
 # zoneinfo 대신 고정 +9시간을 써서 Windows에 tzdata가 없어도 동작합니다.
@@ -66,6 +69,20 @@ def get_demo_user_id(con: sqlite3.Connection) -> int:
         )
         return cursor.lastrowid
     return row["user_id"]
+
+
+def get_user_id(con: sqlite3.Connection, participant: str | None) -> int:
+    """참여자 코드가 없으면 시연 회원, 있으면 그 코드의 회원(없으면 만듦)."""
+    if participant is None:
+        return get_demo_user_id(con)
+    email = f"participant-{participant}@moodwave.local"
+    con.execute("INSERT OR IGNORE INTO tb_user (email, password_hash) VALUES (?, ?)", (email, DEMO_PASSWORD_HASH))
+    return con.execute("SELECT user_id FROM tb_user WHERE email = ?", (email,)).fetchone()["user_id"]
+
+
+def record_owner(con: sqlite3.Connection, record_id: int) -> int | None:
+    row = con.execute("SELECT user_id FROM tb_record WHERE record_id = ?", (record_id,)).fetchone()
+    return None if row is None else row["user_id"]
 
 
 def today_kst() -> str:
