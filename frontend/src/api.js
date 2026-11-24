@@ -75,8 +75,10 @@ export function applyReasons(queue, sentRecordId, currentRecordId, data) {
 }
 
 const REASON_PAGES = ["recommend", "player", "react"];
-// 이유 응답으로 할 일. 늦게 온 응답(다른 기록·곡·화면)은 위험 이동도 반영도 하지 않음(null).
-export function reasonsAction(current, sentRecordId, page, data) {
+// 이유 응답으로 할 일. 늦게 온 응답(더 새 요청이 있음, 다른 기록·곡·화면)은 위험 이동도 반영도 하지 않음(null).
+// 같은 날 다시 기록하면 record_id가 같고 곡도 같을 수 있어서, 요청 번호(sentSeq)로 가장 최근 요청만 받음 (건호 리뷰).
+export function reasonsAction(current, sentRecordId, page, data, sentSeq, latestSeq) {
+  if (sentSeq !== latestSeq) return null;
   const queue = applyReasons(current.queue, sentRecordId, current.recordId, data);
   if (!queue || !REASON_PAGES.includes(page)) return null;
   return data.risk ? {type: "risk"} : {type: "apply", queue};

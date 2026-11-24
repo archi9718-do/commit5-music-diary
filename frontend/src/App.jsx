@@ -122,7 +122,7 @@ export default function App(){
   const [index,setIndex]=useState(0),[agreed,setAgreed]=useState(false),[message,setMessage]=useState(""),[flash,setFlash]=useState("");
   const [month,setMonth]=useState(()=>localDay().slice(0,7)),[viewDay,setViewDay]=useState(""),[demo,setDemo]=useState(false);
   const pending=useRef(false), reactions=useRef(Promise.resolve()), reactionStates=useRef({});
-  const latestDraft=useRef(null); latestDraft.current=draft; // 늦게 온 이유 응답이 지금 화면 상태와 맞는지 볼 때 씀
+  const reasonSeq=useRef(0), latestDraft=useRef(null); latestDraft.current=draft; // 늦게 온 이유 응답이 지금 화면 상태와 맞는지 볼 때 씀
   const unsavedCompletions=useRef(new Set());
   const [completionSaveFailed,setCompletionSaveFailed]=useState(false);
   const [busy,setBusy]=useState(false);
@@ -308,8 +308,9 @@ export default function App(){
       setIndex(0);
       go("recommend");
       // 이유 한 줄은 기다리지 않음: 단계 이름이 먼저 보이고, 응답이 오면 그 칸만 바꿈
+      const seq=++reasonSeq.current;
       if(!draft.demo)request(`/records/${recordId}/reasons`,"POST").then(data=>{
-        const action=reasonsAction(latestDraft.current,recordId,route(),data);
+        const action=reasonsAction(latestDraft.current,recordId,route(),data,seq,reasonSeq.current);
         if(action?.type==="risk")go("risk");
         else if(action)setDraft(old=>{const q=applyReasons(old.queue,recordId,old.recordId,data);return q?{...old,queue:q}:old;});
       }).catch(()=>{});
@@ -485,7 +486,7 @@ export default function App(){
       case "high":return <><Heading title={PAGES.high[0]}/><LP/><div className="analysis-result"><small>시제품이 짐작한 감정</small><strong>{moodInfo(result.candidates[0]).label}</strong></div><div className="actions"><Btn onClick={()=>accept(result.candidates[0]??"steady")}>맞아요</Btn><Btn variant="secondary" onClick={manual}>다른 감정이에요</Btn></div></>;
       case "medium":return <><Heading title={PAGES.medium[0]} desc="기록에서 가까운 두 가지 감정을 골랐어요."/><LP/><MoodSelect ids={result.candidates.length?result.candidates:["steady","low"]} stack onPick={accept}/><div className="actions"><button className="link" onClick={manual}>다른 감정 선택</button></div></>;
       case "low":case "manual":return <><Heading title={PAGES[page][0]} desc={page==="low"?"기록만으로는 판단하기 어려워요. 가까운 감정을 골라주세요.":"지금 마음에 가까운 감정을 하나 골라주세요."}/><LP/><MoodSelect active={pick} onPick={id=>page==="low"?accept(id):setPick(id)}/>{page==="manual"&&<div className="actions"><Btn disabled={!pick} onClick={()=>accept(pick)}>선택 완료</Btn></div>}</>;
-      case "recommend":return <><Heading title="오늘의 추천 음악" desc="확정한 감정에 맞춰 세 곡을 골랐어요."/><div className="center mood-row"><span>확정 감정</span><Mood id={draft.mood}/></div><div className="cards">{queue.map((t,i)=><div key={t.id} className="track-card"><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>{t.artist}</small><p>{t.reason}</p></div><button className={`icon queue-like ${draft.tracks[t.id]?.liked?"liked":""}`} aria-label={`${t.title} ${draft.tracks[t.id]?.liked?"좋아요 취소":"좋아요"}`} aria-pressed={!!draft.tracks[t.id]?.liked} onClick={()=>setReaction(t.id,"like")}><Icon name="heart" size={17} fill={draft.tracks[t.id]?.liked?"currentColor":"none"}/></button><button className="icon play" aria-label={`${t.title} 재생 화면`} onClick={()=>selectTrack(i)}><Icon name="play" size={17}/></button></div>)}</div><div className="actions"><Btn variant="secondary" onClick={review}>곡에 반응 남기기</Btn></div><Notice>추천 목록은 서버에서 가져와요. 재생에는 직접 합성한 시연 음원을 사용해요.</Notice></>;
+      case "recommend":return <><Heading title="오늘의 추천 음악" desc="확정한 감정에 맞춰 세 곡을 골랐어요."/><div className="center mood-row"><span>확정 감정</span><Mood id={draft.mood}/></div><div className="cards">{queue.map((t,i)=><div key={t.id} className="track-card"><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>{t.artist}</small><p>{t.reason}</p></div><button className={`icon queue-like ${draft.tracks[t.id]?.liked?"liked":""}`} aria-label={`${t.title} ${draft.tracks[t.id]?.liked?"좋아요 취소":"좋아요"}`} aria-pressed={!!draft.tracks[t.id]?.liked} onClick={()=>setReaction(t.id,"like")}><Icon name="heart" size={17} fill={draft.tracks[t.id]?.liked?"currentColor":"none"}/></button><button className="icon play" aria-label={`${t.title} 재생 화면`} onClick={()=>selectTrack(i)}><Icon name="play" size={17}/></button></div>)}</div><div className="actions"><Btn variant="secondary" onClick={review}>곡에 반응 남기기</Btn></div><Notice>추천 목록은 서버에서 가져와요. 재생에는 직접 합성한 시연 음원을 사용해요.</Notice>{!draft.demo&&<Notice>곡마다 이유 한 줄은 Claude API(Anthropic)가 만들어요. 오늘 고른 감정, 곡의 밝기·에너지, 최근 7일 감정만 보내고 일기 글은 보내지 않아요.</Notice>}</>;
       case "player":return <Player queue={queue} index={index} onIndex={setIndex} onAction={setReaction} onReview={review}/>;
       case "react":return <><Heading title="곡에 반응 남기기" desc="곡마다 좋았던 순간을 표시해보세요."/><ReviewRows items={queue} states={draft.tracks} onAction={setReaction}/><Notice>완청 {count} / 3곡</Notice>
         {completionSaveFailed&&<Notice>일부 완청을 저장하지 못했어요. 다시 시도하거나 저장된 기록으로 계속할 수 있어요.</Notice>}

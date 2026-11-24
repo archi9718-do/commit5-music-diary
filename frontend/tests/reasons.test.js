@@ -25,3 +25,9 @@ test("risk가 아니면 이유를 반영한다",()=>{
   assert.equal(reasonsAction(current,7,"player",data("agent")).type,"apply");
   assert.equal(reasonsAction(current,8,"recommend",data("agent")),null);
 });
+
+test("가장 최근 요청의 응답만 반영한다 (같은 날 다시 기록해 곡이 같아도)",()=>{
+  assert.equal(reasonsAction(current,7,"recommend",data("agent"),1,2),null);
+  assert.equal(reasonsAction(current,7,"recommend",{...data("template"),risk:true},1,2),null);
+  assert.equal(reasonsAction(current,7,"recommend",data("agent"),2,2).type,"apply");
+});
