@@ -33,6 +33,16 @@ EMOTION_WORDS = {
 # 도구가 곡 정보를 주지 않으므로 악기·장르·가수 언급은 지어낸 내용
 SONG_WORDS = ("피아노", "기타", "드럼", "신스", "보컬", "가사", "장르", "재즈", "힙합", "발라드", "아티스트", "가수", "제목")
 RECENT_WORDS = ("요즘", "며칠", "이번 주", "최근")  # 최근 7일 기록이 없으면 언급 금지
+# 2·3번째 줄의 "앞 곡보다 어떻게" 말은 실제 밝기·에너지 변화와 맞아야 함 (11/24 건호 리뷰: 낮아졌는데 "더 밝고 힘찬"이 통과)
+# 비교하는 말만 셈: "잔잔한", "차분함은 그대로"처럼 상태를 말하는 표현은 방향 주장이 아님
+DIRECTION_WORDS = {
+    ("brightness", "밝기", +1): ("더 밝", "밝게", "밝아", "밝기를 올", "밝기를 높"),
+    ("brightness", "밝기", -1): ("더 어둡", "어둡게", "밝기를 낮"),
+    ("energy", "에너지", +1): ("더 힘", "힘찬", "힘차", "더 활기", "활기차게", "더 신나", "에너지를 올", "에너지를 높",
+                               "기운을 올", "끌어올"),
+    ("energy", "에너지", -1): ("더 차분", "더 잔잔", "에너지를 낮", "에너지를 줄", "기운을 내려", "기운을 낮", "낮춰",
+                               "가라앉혀"),
+}
 
 TEMPLATES = {
     ("좋음", "비슷한 분위기 1"): "지금의 밝은 기분과 닮은 곡으로 시작해요.",
@@ -63,8 +73,13 @@ def template_reasons(emotion: str, steps: list[str]) -> list[str]:
     return [TEMPLATES.get((emotion, step), GENERIC_TEMPLATE) for step in steps]
 
 
-def check_reasons(reasons: list, emotion: str, has_recent: bool) -> tuple[list[str], list[str]]:
-    """(다듬은 문장 3개 또는 [], 문제 코드 목록). 평가 보고를 위해 문제를 모두 모읍니다."""
+def check_reasons(
+    reasons: list, emotion: str, has_recent: bool, songs: list[dict] | None = None,
+) -> tuple[list[str], list[str]]:
+    """(다듬은 문장 3개 또는 [], 문제 코드 목록). 평가 보고를 위해 문제를 모두 모읍니다.
+
+    songs(곡 3개의 brightness·energy)를 주면 2·3번째 줄의 비교 표현이 실제 변화와 맞는지도 봅니다.
+    """
     problems: list[str] = []
 
     def add(code: str) -> None:
@@ -99,5 +114,13 @@ def check_reasons(reasons: list, emotion: str, has_recent: bool) -> tuple[list[s
             for word in RECENT_WORDS:
                 if word in text:
                     add(f"recent:{word}")
+
+    if songs and len(songs) == 3 and len(texts) == 3:
+        ordered = sorted(songs, key=lambda song: song["recommend_order"])
+        for i in (1, 2):
+            for (key, label, sign), words in DIRECTION_WORDS.items():
+                change = ordered[i][key] - ordered[i - 1][key]
+                if any(word in texts[i] for word in words) and change * sign <= 0:
+                    add(f"direction:{label}")
 
     return ([], problems) if problems else (texts, [])

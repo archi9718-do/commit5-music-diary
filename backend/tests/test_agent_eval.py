@@ -43,3 +43,23 @@ def test_summarize_reports_time_and_over_deadline_rate():
     s = summarize(rows)
     assert s["median_seconds"] == 4.5 and s["max_seconds"] == 12.0
     assert s["over_deadline_rate"] == 0.25  # 서버 경로 10초 상한을 넘으면 화면엔 템플릿이 나감
+
+
+def test_recheck_counts_direction_errors_and_human_labels(tmp_path):
+    import csv
+
+    from ai.agent.eval import recheck
+
+    path = tmp_path / "old.csv"
+    header = ["case", "run", "stop", "problems", "tool_calls", "seconds", "text1", "text2", "text3", "hallucination"]
+    ok = ["지금 마음처럼 낮고 잔잔한 곡으로 시작해요.", "밝기를 조금 올려 천천히 이어가요.", "한결 밝은 곡으로 오늘을 마무리해요."]
+    wrong = [ok[0], "에너지를 낮춰 더 차분하게 이어가요.", ok[2]]  # 가라앉음 TARGETS 에너지는 0.30→0.32로 오름
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        writer.writerow(["가라앉음-none", 1, "ok", "", "", 5.0, *ok, "0"])
+        writer.writerow(["가라앉음-none", 2, "ok", "", "", 5.0, *wrong, "1"])
+        writer.writerow(["가라앉음-none", 3, "ok", "", "", 5.0, *ok, ""])
+        writer.writerow(["가라앉음-none", 4, "error:ConnectionError", "", "", 1.0, "", "", "", ""])
+    result = recheck(path)
+    assert result == {"checked": 3, "direction_errors": 1, "human_labeled": 2, "human_errors": 1}

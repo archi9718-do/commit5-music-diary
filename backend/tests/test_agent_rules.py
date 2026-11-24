@@ -79,3 +79,52 @@ def test_recent_word_ok_when_history_exists():
 
 def test_non_dict_items_are_format_problem():
     assert check_reasons(["문장", None, 3], "가라앉음", False) == ([], ["format"])
+
+
+# 건호 리뷰(#27): 2번 곡이 1번보다 밝기·에너지가 낮은데 "더 밝고 힘찬"이 통과하던 문제
+DOWN = [{"recommend_order": 1, "brightness": 0.60, "energy": 0.70},
+        {"recommend_order": 2, "brightness": 0.50, "energy": 0.55},
+        {"recommend_order": 3, "brightness": 0.45, "energy": 0.40}]
+UP = [{"recommend_order": 1, "brightness": 0.20, "energy": 0.30},
+      {"recommend_order": 2, "brightness": 0.45, "energy": 0.32},
+      {"recommend_order": 3, "brightness": 0.70, "energy": 0.35}]
+FIRST = "지금 마음처럼 잔잔한 곡으로 시작해요."
+
+
+@pytest.mark.parametrize(("second", "code"), [
+    ("앞 곡보다 더 밝고 힘찬 곡으로 이어가요.", "direction:밝기"),
+    ("앞 곡보다 더 밝고 힘찬 곡으로 이어가요.", "direction:에너지"),
+    ("밝기를 조금 올려 밝게 이어가요.", "direction:밝기"),
+    ("에너지를 올려 더 활기차게 이어가요.", "direction:에너지"),
+])
+def test_direction_claim_against_lower_scores_is_rejected(second, code):
+    texts, problems = check_reasons(lines(FIRST, second, GOOD[2].replace("밝은", "차분한")), "가라앉음", False, songs=DOWN)
+    assert texts == [] and code in problems
+
+
+def test_direction_claim_matching_scores_passes():
+    reasons = lines(FIRST, "조금 더 밝게 천천히 이어가요.", "한층 더 밝은 곡으로 오늘을 마무리해요.")
+    assert check_reasons(reasons, "가라앉음", False, songs=UP)[1] == []
+
+
+def test_calmer_claim_needs_lower_energy():
+    reasons = lines(FIRST, "에너지를 낮춰 더 차분하게 이어가요.", "한층 더 밝은 곡으로 오늘을 마무리해요.")
+    assert "direction:에너지" in check_reasons(reasons, "가라앉음", False, songs=UP)[1]  # UP은 에너지 0.30→0.32
+    assert "direction:에너지" not in check_reasons(reasons, "가라앉음", False, songs=DOWN)[1]
+
+
+def test_first_line_and_unchanged_words_are_not_direction_claims():
+    reasons = lines("지금처럼 밝고 힘찬 곡으로 시작해요.", "차분함은 그대로 두고 이어가요.", "잔잔한 흐름으로 오늘을 마무리해요.")
+    assert check_reasons(reasons, "가라앉음", False, songs=DOWN)[1] == []
+
+
+@pytest.mark.parametrize(("emotion", "steps", "songs"), [
+    ("가라앉음", ["맞추기", "조금 밝게", "더 밝게"], UP),
+    ("예민함", ["맞추기", "에너지 낮추기", "차분하고 조금 밝게"],
+     [{"recommend_order": 1, "brightness": 0.25, "energy": 0.85}, {"recommend_order": 2, "brightness": 0.30, "energy": 0.50},
+      {"recommend_order": 3, "brightness": 0.55, "energy": 0.30}]),
+])
+def test_templates_pass_direction_check_on_ordered_flows(emotion, steps, songs):
+    texts = template_reasons(emotion, steps)
+    reasons = [{"recommend_order": i, "text": t} for i, t in enumerate(texts, 1)]
+    assert check_reasons(reasons, emotion, False, songs=songs) == (texts, [])

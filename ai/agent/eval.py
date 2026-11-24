@@ -20,7 +20,7 @@ for path in (REPO_ROOT, REPO_ROOT / "backend"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from ai.agent.rules import is_risk
+from ai.agent.rules import check_reasons, is_risk
 from ai.agent.service import DEADLINE_SECONDS, write_reasons
 
 from app.recommender import TARGETS  # 추천과 같은 단계 이름·좌표를 씀
@@ -79,6 +79,31 @@ def _timing(seconds: list[float]) -> dict:
             "over_deadline_rate": sum(s > DEADLINE_SECONDS for s in seconds) / len(seconds)}
 
 
+def recheck(csv_path: Path) -> dict:
+    """이미 돌린 결과 CSV를 지금 검사기(방향 검사 포함)로 다시 봅니다. API를 부르지 않습니다.
+
+    검사기 통과(stop=ok)와 사실 정확도를 나눠 보기 위한 것: direction_errors는 자동으로 잡은 사실 오류,
+    human_errors는 사람이 hallucination 칸에 1을 적은 줄 수입니다.
+    """
+    facts = {case["name"]: case["facts"] for case in build_cases()}
+    result = {"checked": 0, "direction_errors": 0, "human_labeled": 0, "human_errors": 0}
+    with Path(csv_path).open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row["stop"] != "ok":
+                continue
+            case = facts[row["case"]]
+            reasons = [{"recommend_order": i, "text": row[f"text{i}"]} for i in (1, 2, 3)]
+            _, problems = check_reasons(reasons, case["today"]["confirmed_emotion"],
+                                        has_recent=bool(case["recent_moods"]), songs=case["songs"])
+            result["checked"] += 1
+            result["direction_errors"] += any(p.startswith("direction:") for p in problems)
+            label = (row.get("hallucination") or "").strip()
+            if label:
+                result["human_labeled"] += 1
+                result["human_errors"] += label == "1"
+    return result
+
+
 def risk_agreement() -> float:
     cases = json.loads(RISK_FIXTURE.read_text(encoding="utf-8"))
     return sum(is_risk(c["text"]) is c["risk"] for c in cases) / len(cases)
@@ -88,7 +113,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="추천 이유 에이전트 지표 측정 (실제 API 호출)")
     parser.add_argument("--runs", type=int, default=10, help="경우마다 반복 횟수 (기본 10 → 120회)")
     parser.add_argument("--yes", action="store_true", help="비용 확인 없이 바로 실행")
+    parser.add_argument("--recheck", type=Path, help="이미 돌린 CSV를 지금 검사기로 다시 보기 (API 호출 없음)")
     args = parser.parse_args()
+    if args.recheck:
+        print(json.dumps(recheck(args.recheck), ensure_ascii=False, indent=2))
+        return
 
     cases = build_cases()
     total = len(cases) * args.runs

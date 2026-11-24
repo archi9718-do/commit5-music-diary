@@ -29,6 +29,7 @@ SYSTEM_PROMPT = """당신은 음악 일기 앱에서 추천곡마다 이유 한 
 - 숫자를 쓰지 않습니다. 밝기·에너지는 "조금 더 밝게", "차분하게"처럼 말로 표현합니다
 - 곡 제목, 가수, 악기, 장르를 언급하지 않습니다 (도구가 알려 주지 않습니다)
 - 확정된 감정과 다른 감정을 말하지 않습니다
+- 2·3번째 곡을 앞 곡과 비교할 때는 get_songs의 밝기·에너지가 실제로 오른 쪽, 내린 쪽만 말합니다 (예: 에너지가 올랐으면 "더 차분하게"라고 쓰지 않음)
 - 진단, 병명, 치료, 상담 권유, "괜찮아질 거예요" 같은 약속, "힘내", "~하세요" 같은 명령을 쓰지 않습니다
 - 사용자의 하루나 주변 사람을 짐작해 말하지 않습니다
 - 최근 7일 기록이 비어 있으면 "요즘", "최근"을 쓰지 않습니다
@@ -151,7 +152,7 @@ def write_reasons(facts: dict, *, client=None) -> dict:
             if not isinstance(data, dict):
                 return done("bad_json")
             texts, problems = check_reasons(data.get("reasons"), facts["today"]["confirmed_emotion"],
-                                            has_recent=bool(facts["recent_moods"]))
+                                            has_recent=bool(facts["recent_moods"]), songs=facts["songs"])
             return done("ok", texts) if not problems else done("checker", problems=problems)
         return done("max_turns")
     except Exception as exc:  # noqa: BLE001 - 어떤 실패든 템플릿으로 대신하므로 이름만 남김

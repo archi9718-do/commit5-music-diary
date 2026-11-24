@@ -211,3 +211,9 @@ def test_warm_up_skipped_without_key(monkeypatch):
     monkeypatch.setattr(service, "ready", lambda: False)
     service.warm_up()
     assert client.retrieved == []
+
+
+def test_direction_claim_is_checked_against_tool_songs():
+    texts = [GOOD[0], "에너지를 낮춰 더 차분하게 이어가요.", GOOD[2]]  # FACTS 2번 곡은 에너지가 0.30→0.32로 오름
+    result = write_reasons(FACTS, client=FakeClient([final_json(texts)]))
+    assert result["stop"] == "checker" and "direction:에너지" in result["problems"]
