@@ -119,3 +119,39 @@ def test_recent_song_exclusion_is_per_participant(client):
         assert db.get_user_id(con, "AAAA") != db.get_user_id(con, "BBBB")
         assert db.get_user_id(con, "AAAA") == db.get_user_id(con, "AAAA")
         assert db.get_user_id(con, None) == db.get_demo_user_id(con)
+
+
+# 건호 리뷰(#30): 주인 확인이 FastAPI와 다르게 id를 해석해 "+5" 같은 주소로 빠져나가던 문제
+@pytest.mark.parametrize("form", ["+{id}", "0{id}"])
+def test_owner_check_uses_same_record_id_as_route(client, form):
+    record_id = new_record(client, "AAAA")
+    assert recommend(client, "AAAA", record_id).status_code == 200
+    path = f"/api/records/{form.format(id=record_id)}"
+    assert client.get(f"{path}/lp", headers=as_("BBBB")).status_code == 404
+    assert client.get(f"{path}/post-listening", headers=as_("BBBB")).status_code == 404
+    assert client.get(f"{path}/lp", headers=as_("AAAA")).status_code == 200
+
+
+@pytest.mark.parametrize("bad", ["²", "abc", "1.5", "-1", "0"])
+def test_invalid_record_id_is_422_not_500(client, bad):
+    assert client.get(f"/api/records/{bad}/lp", headers=as_("AAAA")).status_code == 422
+    assert client.get(f"/api/records/{bad}/post-listening", headers=as_("AAAA")).status_code == 422
+
+
+def test_one_participants_history_does_not_change_anothers_recommendation(client):
+    # 건호가 실제 API로 확인한 시나리오의 회귀 시험: AAAA가 어제 받은 곡은 AAAA 오늘 추천에서만 빠짐
+    yesterday = new_record(client, "AAAA", "어제")
+    first = client.post("/api/recommendations", json={"record_id": yesterday, "confirmed_emotion": "좋음"},
+                        headers=as_("AAAA")).json()["songs"]
+    with closing(db.connect()) as con, con:
+        con.execute("UPDATE tb_record SET record_date = date(record_date, '-1 days') WHERE record_id = ?", (yesterday,))
+    seen = {song["song_id"] for song in first}
+
+    def today_songs(code):
+        record_id = new_record(client, code, "오늘")
+        response = client.post("/api/recommendations", json={"record_id": record_id, "confirmed_emotion": "좋음"},
+                               headers=as_(code))
+        return {song["song_id"] for song in response.json()["songs"]}
+
+    assert today_songs("BBBB") == seen  # 다른 참여자는 AAAA의 이력과 상관없이 같은 곡
+    assert today_songs("AAAA").isdisjoint(seen)  # AAAA는 어제 곡을 피함

@@ -37,3 +37,10 @@ test("코드가 없거나 형식이 틀리면 헤더를 보내지 않는다", ()
   assert.deepEqual(participantHeader(fakeStorage({[PARTICIPANT_KEY]: "\"K7QM\""})), {"X-Participant": "K7QM"});
   assert.deepEqual(participantHeader(undefined), {});
 });
+
+test("다음 참여자로 시작은 sessionStorage의 임시 LP(감상 후 이어서 하기)도 지운다", () => {
+  const local = fakeStorage({"moodwave.mvp.records.v1": "[1]"});
+  const session = fakeStorage({"moodwave.mvp.pending-lp.v1": "{\"recordId\":7}", "other.tab": "x"});
+  startNextParticipant(local, Math.random, session);
+  assert.deepEqual(session.keys(), ["other.tab"]);
+});
