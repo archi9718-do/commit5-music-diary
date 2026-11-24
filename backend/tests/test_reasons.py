@@ -169,3 +169,12 @@ def test_queued_call_is_cancelled_after_deadline(client, monkeypatch):
     release.set()
     executor.shutdown(wait=True)
     assert len(calls) == 2  # 기다리는 사람이 없는 세 번째 호출은 시작되지 않음
+
+
+def test_server_start_warms_up_agent(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setenv("MOODWAVE_DB_PATH", str(tmp_path / "warm.db"))
+    monkeypatch.setattr(reasons, "agent_warm_up", lambda: calls.append(1))
+    with TestClient(main.app):
+        pass
+    assert calls == [1]

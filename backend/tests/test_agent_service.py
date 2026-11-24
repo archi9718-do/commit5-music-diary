@@ -169,3 +169,45 @@ def test_default_client_is_created_once_and_reused(monkeypatch):
     assert service.write_reasons(FACTS)["texts"] == GOOD
     assert service.write_reasons(FACTS)["texts"] == GOOD
     assert len(made) == 1  # 연결을 다시 맺지 않도록 같은 클라이언트를 다시 씀
+
+
+class WarmClient:
+    def __init__(self, error=None):
+        self.error, self.retrieved = error, []
+        self.models = SimpleNamespace(retrieve=self._retrieve)
+
+    def with_options(self, **options):
+        return self
+
+    def _retrieve(self, model):
+        self.retrieved.append(model)
+        if self.error:
+            raise self.error
+
+
+def test_warm_up_opens_connection_without_tokens(monkeypatch):
+    from ai.agent import service
+
+    client = WarmClient()
+    monkeypatch.setattr(service, "_client", client)
+    monkeypatch.setattr(service, "ready", lambda: True)
+    service.warm_up()
+    assert client.retrieved == ["claude-opus-5-5"]  # 모델 정보 조회는 토큰을 쓰지 않음
+
+
+def test_warm_up_never_raises(monkeypatch):
+    from ai.agent import service
+
+    monkeypatch.setattr(service, "_client", WarmClient(error=ConnectionError("offline")))
+    monkeypatch.setattr(service, "ready", lambda: True)
+    service.warm_up()  # 시연장 인터넷이 끊겨도 서버는 켜져야 함
+
+
+def test_warm_up_skipped_without_key(monkeypatch):
+    from ai.agent import service
+
+    client = WarmClient()
+    monkeypatch.setattr(service, "_client", client)
+    monkeypatch.setattr(service, "ready", lambda: False)
+    service.warm_up()
+    assert client.retrieved == []

@@ -24,11 +24,15 @@ from ai.agent.rules import is_risk, template_reasons  # 규칙은 표준 라이�
 
 try:
     from ai.agent.service import ready as agent_ready
+    from ai.agent.service import warm_up as agent_warm_up
     from ai.agent.service import write_reasons
 # 의도한 넓은 예외 처리: 에이전트를 못 불러와도 서버는 켜지고 이 경로는 템플릿 문장을 씁니다.
 except Exception:  # noqa: BLE001
     def agent_ready() -> bool:
         return False
+
+    def agent_warm_up() -> None:
+        pass
 
     write_reasons = None
 

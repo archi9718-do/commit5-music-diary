@@ -79,6 +79,19 @@ def _default_client():
     return _client
 
 
+def warm_up() -> None:
+    """서버가 켜질 때 한 번: SDK를 불러오고 연결을 미리 맺어 둠 (11/24 첫 요청 11.2초 → 10초 상한 넘김).
+
+    모델 정보 조회(models.retrieve)는 토큰을 쓰지 않습니다. 실패해도 서버는 켜집니다.
+    """
+    if not ready():
+        return
+    try:
+        _default_client().with_options(timeout=5.0).models.retrieve(MODEL)
+    except Exception as exc:  # noqa: BLE001 - 미리 준비가 실패해도 첫 요청에서 다시 연결하면 됨
+        logger.warning("추천 이유 에이전트 미리 연결 실패: %s", type(exc).__name__)
+
+
 def _tool_results(blocks, facts: dict, called: list[str]) -> list[dict]:
     sources = {"get_today": "today", "get_songs": "songs", "get_recent_moods": "recent_moods"}
     results = []

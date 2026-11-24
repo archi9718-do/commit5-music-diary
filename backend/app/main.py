@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from . import reasons
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
 from .post_listening import router as post_listening_router
 from .reasons import router as reasons_router
@@ -91,6 +92,7 @@ async def lifespan(app: FastAPI):
     init_db()
     prepare_emotion_model()  # 감정 모델은 서버가 켜질 때 한 번만 불러옵니다.
     prepare_stt_model()  # 받아쓰기 모델도 미리 불러와 첫 녹음이 느리지 않게 합니다.
+    reasons.agent_warm_up()  # 추천 이유 에이전트도 연결을 미리 맺어 첫 요청이 10초를 넘지 않게 합니다.
     yield
 
 
