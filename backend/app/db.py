@@ -12,6 +12,7 @@ from pathlib import Path
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "moodwave.db"
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
+AUDIO_SCHEMA_PATH = SCHEMA_PATH.with_name("audio_schema.sql")
 
 # 로그인 구현 전까지 모든 기록을 이 시연용 회원 1명에게 저장합니다.
 # 로그인이 붙으면 get_demo_user_id() 대신 로그인한 회원의 user_id를 넘기면 됩니다.
@@ -43,12 +44,17 @@ def init_db() -> None:
     try:
         with con:
             con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            init_audio_catalog(con)
             con.execute(
                 "INSERT OR IGNORE INTO tb_user (email, password_hash) VALUES (?, ?)",
                 (DEMO_USER_EMAIL, DEMO_PASSWORD_HASH),
             )
     finally:
         con.close()
+
+
+def init_audio_catalog(con: sqlite3.Connection) -> None:
+    con.execute(AUDIO_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def get_demo_user_id(con: sqlite3.Connection) -> int:

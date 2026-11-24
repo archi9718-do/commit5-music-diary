@@ -51,6 +51,40 @@ npm run dev
 
 실제 로그인/회원가입, 새 기기 로그인 시 기존 세션 종료, 음성 피치 분석, 8대 감정의 조합, 외부 음악·영상 서비스 및 권리 확인, 기기 간 기록 목록 동기화, 활동 콘텐츠 추천, 외부 인기 차트 및 모델 기반 Day Type. 도움 화면은 시연 문구로 분기합니다. [한국 109 상담 안내](https://www.129.go.kr/109)
 
+## 등록 음원 확인
+
+서버와 프론트를 로컬에서 실행하고 시작 화면의 **등록 음원 듣기**를 누릅니다. 음원은 기본적으로 저장소의 `data/music/`에서 읽으며, 서버 환경 변수 `MOODWAVE_AUDIO_DIR`로 다른 폴더를 지정할 수 있습니다. 공개 시연 승인 값이 0인 곡은 서버 PC의 localhost에서만 들을 수 있습니다. 추천 흐름의 기존 시연 플레이어와는 별도 화면입니다.
+
+새 PC에서는 MP3 파일과 CSV를 준비한 뒤 `backend/`에서 목록을 등록합니다. CSV 헤더는 `song_id,title,artist,filename,is_public_demo`입니다. 곡 ID는 `custom_001`처럼 지정하고 파일명은 음원 폴더 기준의 상대 경로로 작성합니다. 공개 시연에 올릴 곡만 `is_public_demo`를 `1`로 지정합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade -r requirements.txt
+.\.venv\Scripts\python.exe -m app.import_audio ../data/audio-manifest.csv --audio-dir ../data/music
+```
+
+등록 명령은 CSV에 있는 곡만 추가하거나 갱신합니다. 승인 취소는 해당 곡의 값을 `0`으로 바꿔 다시 등록합니다. 별도 DB를 쓰려면 등록 명령과 음원 서버에 같은 `MOODWAVE_DB_PATH`를 설정합니다.
+
+ngrok 시연에는 음원 전용 빌드와 포트 8001을 사용합니다. 저장소 루트에서 다음 순서로 실행합니다.
+
+```powershell
+cd frontend
+$env:VITE_AUDIO_DEMO_ONLY = "1"
+npm.cmd run build -- --outDir ../data/audio-demo-dist --emptyOutDir
+$buildExit = $LASTEXITCODE
+Remove-Item Env:VITE_AUDIO_DEMO_ONLY
+if ($buildExit -ne 0) { throw "음원 전용 화면 빌드 실패" }
+cd ../backend
+.\.venv\Scripts\python.exe -m uvicorn app.audio_demo:create_app --factory --host 127.0.0.1 --port 8001
+```
+
+다른 터미널에서 ngrok을 **음원 서버의 8001 포트**에 연결합니다. [ngrok Basic Auth 안내](https://ngrok.com/docs/gateway/traffic-policy/examples/add-authentication)에 따라 `data/ngrok-audio-auth.json`을 만들고 시연용 계정 정보를 설정합니다. 아래 명령은 저장소 루트에서 실행합니다.
+
+```powershell
+ngrok http http://127.0.0.1:8001 --traffic-policy-file data/ngrok-audio-auth.json --inspect=false
+```
+
+음원 전용 서버는 승인 값이 1인 곡만 제공합니다. 목록이 비어 있으면 CSV 등록 여부와 DB·음원 경로 설정을 확인합니다. 인증 파일, 음원, SQLite DB는 로컬에 보관합니다.
+
 ## 팀 사용자 테스트
 
 반 친구에게 자율 참여를 요청하고 가상 일기로 같은 흐름을 체험하도록 안내합니다. 실제 개인정보나 민감한 기록은 받지 않습니다. 참여 코드를 써서 아래 항목을 따로 적습니다.
