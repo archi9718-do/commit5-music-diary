@@ -1,10 +1,12 @@
 import React, {useEffect, useRef, useState} from "react";
+import AudioLibrary from "./AudioLibrary.jsx";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
 import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons, reasonsAction} from "./api.js";
 import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
 const PAGES={
   start:["시작","시작"],
+  "audio-library":["등록 음원","음악 감상"],
   login:["로그인","시작"], signup:["회원가입","시작"],
   record:["오늘의 기록","감정 기록"], consent:["음성 녹음 동의","감정 기록"], voice:["음성 녹음","감정 기록"],
   loading:["감정 분석 중","감정 확인"], high:["오늘 이런 기분이었나요?","감정 확인"], medium:["어느 쪽에 더 가까울까요?","감정 확인"],
@@ -473,7 +475,8 @@ export default function App(){
         :<p role="status">서버에서 LP 기록을 확인하고 있어요.</p>}
     </>;
     switch(page){
-      case "start":return <><div className="start-kicker"><span/> MOOD JOURNAL</div><Heading title="오늘의 마음을 음악으로" desc="하루를 짧게 기록하고, 어울리는 음악을 LP판에 남겨보세요."/><LP/><div className="actions"><Btn onClick={preferred}>기록 시작 <Icon name="arrow" size={17}/></Btn><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 살펴보기</Btn></div><div className="demo-legal"><button className="link" onClick={()=>go("login")}>로그인 화면 보기</button><span>·</span><button className="link" onClick={()=>go("signup")}>회원가입 화면 보기</button></div><Notice>테스트 계정으로 기록을 저장하는 시제품이에요.</Notice></>;
+      case "audio-library":return <AudioLibrary/>;
+      case "start":return <><div className="start-kicker"><span/> MOOD JOURNAL</div><Heading title="오늘의 마음을 음악으로" desc="하루를 짧게 기록하고, 어울리는 음악을 LP판에 남겨보세요."/><LP/><div className="actions"><Btn onClick={preferred}>기록 시작 <Icon name="arrow" size={17}/></Btn><Btn variant="secondary" onClick={()=>go("history")}>지난 기록 살펴보기</Btn><Btn variant="secondary" onClick={()=>go("audio-library")}>등록 음원 듣기</Btn></div><div className="demo-legal"><button className="link" onClick={()=>go("login")}>로그인 화면 보기</button><span>·</span><button className="link" onClick={()=>go("signup")}>회원가입 화면 보기</button></div><Notice>테스트 계정으로 기록을 저장하는 시제품이에요.</Notice></>;
       case "login":case "signup":return <><Heading title={PAGES[page][0]} desc="화면 미리보기 · 실제 계정 인증은 연결하지 않았어요."/><div className="surface auth-demo"><label className="field">아이디<input value="moodwave-demo" readOnly/></label><label className="field">비밀번호<input value="demo-only" type="password" readOnly/></label><Notice>예시 정보만 표시해요. 실제 아이디나 비밀번호를 입력하지 않아요.</Notice></div><div className="actions"><Btn onClick={preferred}>시연 모드로 계속하기</Btn><Btn variant="secondary" onClick={()=>go(page==="login"?"signup":"login")}>{page==="login"?"회원가입 화면 보기":"로그인 화면 보기"}</Btn></div></>;
       case "record":return <><Heading title="오늘의 기록" desc="오늘의 마음을 한 문장으로 남겨도 좋아요."/><form onSubmit={e=>{e.preventDefault();if(draft.input.trim())analyze(draft.input,"text");}}><div className="surface"><label className="field">오늘 있었던 일<textarea value={draft.input} maxLength={300} rows={6} onChange={e=>patch({input:e.target.value,mode:"text",recordId:null,demo:false})} placeholder="오늘은 어떤 기분이었나요?"/></label><div className="field-meta"><span>기록을 완료하면 입력한 글이 서버로 전송돼요.</span><span>{draft.input.length} / 300</span></div></div><div className="actions"><button className="btn primary" disabled={!draft.input.trim()} type="submit">기록 완료 <Icon name="arrow" size={16}/></button><Btn variant="secondary" onClick={optionalVoice}><Icon name="mic" size={17}/> 음성으로 기록</Btn><button type="button" className="link" onClick={manual}>감정 직접 선택</button></div></form></>;
       case "consent":return <><Heading title="음성 녹음 동의" desc="녹음을 시작하기 전에 확인해주세요."/><div className="surface consent"><Icon name="shield" size={25}/><h2>원본 음성은 저장하지 않아요</h2><p>녹음은 자동 받아쓰기를 위해 서버로 한 번 보내고, 서버는 받아쓴 글만 저장해요. 녹음을 종료하거나 화면에서 나가면 마이크를 닫아요.</p><label className="checkline"><input type="checkbox" checked={agreed} onChange={e=>setAgreed(e.target.checked)}/> 안내를 읽고 마이크 사용에 동의해요.</label></div><div className="actions"><Btn disabled={!agreed} onClick={()=>go("voice")}>녹음 화면으로</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 기록하기</Btn></div></>;
@@ -507,7 +510,7 @@ export default function App(){
       default:return null;
     }
   }
-  const noTabs=["start","login","signup","risk"].includes(page);
+  const noTabs=["start","login","signup","risk","audio-library"].includes(page);
   const pendingMood=!draft.demo&&!recovery&&["record","history","today"].includes(page)?readPendingLP():null;
   const active=page==="today"||page==="engrave"||page==="engraved"?"today":page==="history"?"history":PAGES[page]?.[1]==="나의 기록"?"me":"record";
   return <div className="layout">

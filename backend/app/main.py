@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from . import reasons
+from .audio import router as audio_router
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
 from .post_listening import router as post_listening_router
 from .reasons import router as reasons_router
@@ -104,6 +105,7 @@ app = FastAPI(
 )
 app.include_router(post_listening_router)
 app.include_router(reasons_router)
+app.include_router(audio_router)
 
 # 로컬 React(Vite/CRA 등) 개발 서버만 허용한 설정입니다.
 app.add_middleware(

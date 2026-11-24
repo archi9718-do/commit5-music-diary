@@ -1,9 +1,13 @@
 import {MOODS, recommend} from "./domain.js";
 
-const base = (import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+// 음원 전용 화면에서는 ngrok 로그인과 음원 API가 같은 주소를 사용합니다.
+const base = import.meta.env?.VITE_AUDIO_DEMO_ONLY === "1"
+  ? ""
+  : (import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+export const apiUrl = path => `${base}${path}`;
 
 export async function request(path, method = "GET", body) {
-  const response = await fetch(`${base}/api${path}`, {
+  const response = await fetch(apiUrl(`/api${path}`), {
     method,
     signal: AbortSignal.timeout(30000),
     // 녹음(Blob)은 JSON 대신 본문 그대로 보냄 (POST /records/voice는 raw body)

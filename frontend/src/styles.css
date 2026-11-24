@@ -130,6 +130,8 @@ h1:focus{outline:none}
 .bottom-nav button[aria-current=page]{color:#5c2783;background:#eee0fc}
 .toast{position:fixed;z-index:5;bottom:75px;left:50%;transform:translateX(-50%);background:#322346;color:#fffaff;border-radius:13px;padding:9px 15px;width:max-content;max-width:85vw;text-align:center;font-size:12px}
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.audio-library{display:grid;gap:16px}
+.audio-library select,.audio-library audio{width:100%;min-width:0}
 @media (max-width:790px){.desktop-intro{display:none}.layout{padding:18px 12px}.phone{min-height:calc(100svh - 36px)}}
 @media (max-width:480px){.layout{padding:0;background:var(--bg)}.phone{width:100%;min-height:100svh;border:0;border-radius:0;overflow:visible;box-shadow:none;background:linear-gradient(150deg,#fcf8ff6b,#f8f0ffbb)}.screen{padding-inline:20px}.header{padding-inline:19px}.page-start{padding-top:42px}}
 @media (max-width:350px){.screen{padding-inline:14px}.track-card{padding:8px;gap:6px}.cover{width:40px;height:40px}.track-controls{min-width:70px}.icon.queue-like{width:27px}.icon.play{width:31px;height:31px}}
