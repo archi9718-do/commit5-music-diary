@@ -62,3 +62,10 @@ export function lpTracks(songs, mood) {
 export const lpStates = songs => Object.fromEntries(
   songs.map(song => [`server:${song.song_id}`, songState(song)]),
 );
+
+// 추천 이유 응답을 큐에 반영. 기다리는 사이 기록이나 곡이 바뀌었으면 null(버림).
+export function applyReasons(queue, sentRecordId, currentRecordId, data) {
+  const ids = data?.reasons?.map(r => `server:${r.song_id}`) ?? [];
+  if (sentRecordId !== currentRecordId || ids.length !== queue.length || ids.some((id, i) => id !== queue[i].id)) return null;
+  return queue.map((track, i) => ({...track, reason: data.reasons[i].text}));
+}

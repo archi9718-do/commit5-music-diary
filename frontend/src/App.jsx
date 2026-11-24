@@ -1,6 +1,6 @@
 import React, {useEffect, useRef, useState} from "react";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
-import {request, moodId, analysisResult, lpTracks, lpStates, songState} from "./api.js";
+import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons} from "./api.js";
 import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
 const PAGES={
@@ -304,6 +304,11 @@ export default function App(){
       patch({mood:id,queue:songs,tracks,response:"",askMood:false,engrave:[]});
       setIndex(0);
       go("recommend");
+      // 이유 한 줄은 기다리지 않음: 단계 이름이 먼저 보이고, 응답이 오면 그 칸만 바꿈
+      if(!draft.demo)request(`/records/${recordId}/reasons`,"POST").then(data=>{
+        if(data.risk){go("risk");return;}
+        setDraft(old=>{const q=applyReasons(old.queue,recordId,old.recordId,data);return q?{...old,queue:q}:old;});
+      }).catch(()=>{});
     },setFlash);
   }
   function manual(){if(classify(draft.input).kind==="risk"){go("risk");return;}setPick(null);go("manual");}
