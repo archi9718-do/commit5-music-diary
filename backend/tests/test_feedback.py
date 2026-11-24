@@ -1,6 +1,8 @@
 """v5 DB(tb_record, tb_record_song) 기준 추천곡 반응·LP 새김·하루 1건 덮어쓰기 시험."""
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, BrokenBarrierError, local
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,6 +30,32 @@ def make_record_with_songs(client: TestClient, emotion: str = "가라앉음") ->
 
 def feedback(client: TestClient, record_id: int, order: int, **body):
     return client.patch(f"/api/records/{record_id}/songs/{order}", json=body)
+
+
+def test_concurrent_partial_feedback_keeps_both_updates(monkeypatch):
+    original = main._feedback_row
+    first_reads = Barrier(2)
+    worker = local()
+
+    def delayed_first_read(con, record_id, order):
+        row = original(con, record_id, order)
+        if not getattr(worker, "read", False):
+            worker.read = True
+            try:
+                first_reads.wait(timeout=0.2)
+            except BrokenBarrierError:
+                # SQLite가 첫 번째 쓰기를 직렬화하면 두 번째 조회는 그 뒤에 실행됩니다.
+                pass
+        return row
+
+    with TestClient(main.app) as client, ThreadPoolExecutor(max_workers=2) as pool:
+        record_id = make_record_with_songs(client)
+        monkeypatch.setattr(main, "_feedback_row", delayed_first_read)
+        like = pool.submit(feedback, client, record_id, 1, is_liked=True)
+        complete = pool.submit(feedback, client, record_id, 1, is_completed=True)
+        assert [like.result().status_code, complete.result().status_code] == [200, 200]
+        song = client.get(f"/api/records/{record_id}/lp").json()["songs"][0]
+        assert song["is_liked"] and song["is_completed"]
 
 
 def test_like_skip_complete_and_engrave_only_liked_songs():

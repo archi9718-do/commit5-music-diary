@@ -3,6 +3,7 @@
 # 건호 서버는 이 파일의 analyze_text()와 warm_up()만 부릅니다.
 # 3주차에 안쪽 모델을 바꿔도 이 두 함수의 이름과 결과 양식은 그대로 둡니다.
 import json
+import math
 import time
 
 if __package__:
@@ -34,10 +35,12 @@ def analyze_text(text: str, record_id=None) -> dict:
 
     result = predict_emotion(text, record_id)
 
-    # 결과 양식 점검: 서버가 거절하기 전에 여기서 먼저 잡아냄
+    # 파이썬 최적화 모드에서도 모델 결과 양식을 검사합니다.
     probs = result["probs"]
-    assert set(probs) == set(EMOTIONS), "probs 키가 4종 감정과 다릅니다"
-    assert abs(sum(probs.values()) - 1.0) < 1e-6, "probs 합이 1이 아닙니다"
+    if set(probs) != set(EMOTIONS):
+        raise RuntimeError("probs 키가 4종 감정과 다릅니다")
+    if not math.isclose(sum(probs.values()), 1.0, rel_tol=0, abs_tol=1e-6):
+        raise RuntimeError("probs 합이 1이 아닙니다")
     return result
 
 

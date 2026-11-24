@@ -1,6 +1,6 @@
 import {MOODS, recommend} from "./domain.js";
 
-const base = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const base = (import.meta.env?.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/+$/, "");
 
 export async function request(path, method = "GET", body) {
   const response = await fetch(`${base}/api${path}`, {
@@ -15,12 +15,17 @@ export async function request(path, method = "GET", body) {
       body: JSON.stringify(body),
     }),
   });
-  const data = await response.json().catch(() => null);
   if (!response.ok) {
+    const data = await response.json().catch(() => null);
     const error = new Error(typeof data?.detail === "string" ? data.detail : "서버 요청을 처리하지 못했어요.");
     error.status = response.status;
     throw error;
   }
+  const data = await response.json().catch(error => {
+    if (!(error instanceof SyntaxError)) throw error;
+    return null;
+  });
+  if (!data || typeof data !== "object") throw new Error("서버 응답 형식이 올바르지 않아요.");
   return data;
 }
 

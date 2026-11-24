@@ -6,7 +6,7 @@ import os
 os.environ["HF_HOME"] = r"C:\work\moodwave_data\hf_cache"
 
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 MODEL_NAME = "hun3359/klue-bert-base-sentiment"                     # 허깅페이스 모델 이름
 SAVE_DIR = r"C:\work\moodwave_data\models\klue-bert-base-sentiment"  # 모델을 보관할 폴더

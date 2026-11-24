@@ -54,6 +54,14 @@ export const RESPONSES=["조금 나아졌어요","그대로예요","더 무거�
 export const NO_MOOD_RESPONSE="무응답";
 export const canReview = (mood,ids,states)=>
   (mood==="low"||mood==="tender")&&ids.filter(id=>states[id]?.completed).length>=2;
+export function hasCompletedPlayback(played, duration) {
+  if (!Number.isFinite(duration) || duration <= 0) return false;
+  let listened = 0;
+  // played는 브라우저가 합쳐서 제공하는 재생 구간입니다. 앞으로 넘긴 구간은 포함되지 않습니다.
+  for (let i = 0; i < played.length; i++) listened += played.end(i) - played.start(i);
+  const tolerance = Math.min(0.75, duration * 0.03);
+  return listened > 0 && duration - listened <= tolerance;
+}
 export function nextTrackState(previous={}, action) {
   if (action==="like") return previous.liked
     ? {...previous,liked:false,engraved:false}

@@ -3,6 +3,7 @@ import logging
 import sys
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
+from traceback import extract_tb
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi import Path as PathParam
@@ -11,8 +12,10 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
+from .post_listening import router as post_listening_router
 from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
+    MAX_RECORD_TEXT_LENGTH,
     EmotionResult,
     EngraveRequest,
     RecommendationRequest,
@@ -96,6 +99,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+app.include_router(post_listening_router)
 
 # 로컬 React(Vite/CRA 등) 개발 서버만 허용한 설정입니다.
 app.add_middleware(
@@ -150,6 +154,13 @@ def _check_emotion_ready() -> None:
         )
 
 
+def _log_model_failure(label: str, exc: Exception) -> None:
+    # 원문과 예외 메시지 대신 파일명·줄 번호만 기록해 실패 지점을 추적합니다.
+    frames = extract_tb(exc.__traceback__)[-4:]
+    locations = " <- ".join(f"{Path(frame.filename).name}:{frame.lineno}" for frame in reversed(frames))
+    logger.warning("%s 실패: %s [%s]", label, type(exc).__name__, locations)
+
+
 def _analyze_and_save(text: str) -> EmotionResult:
     """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
     _check_emotion_ready()
@@ -157,17 +168,16 @@ def _analyze_and_save(text: str) -> EmotionResult:
     # 1) 감정 분석 먼저 (아직 DB에 아무것도 쓰지 않음)
     try:
         result = emotion_service.analyze_text(text, record_id=None)
-    except ValueError as exc:  # 빈 글, 너무 긴 글 등 입력 문제
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # 모델 실행 중 오류
-        logger.exception("감정 분석 실패")
+        _log_model_failure("감정 분석", exc)
         raise HTTPException(status_code=503, detail="감정 분석 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
 
     # 2) 결과 양식 검사: /api/emotions와 같은 규칙(schemas.EmotionResult)으로 확인
     try:
         checked = EmotionResult(**{**result, "record_id": 1, "text": text})  # record_id는 저장 후 채움
     except (ValidationError, TypeError) as exc:
-        logger.error("감정 결과 양식 오류: %s", exc)
+        # 검증 예외 본문에는 사용자의 일기나 모델 입력값이 포함될 수 있습니다.
+        logger.error("감정 결과 양식 오류: %s", type(exc).__name__)
         raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
 
     # 3) 기록과 감정 결과를 한 번에 저장 (/api/emotions와 같은 칸에 저장)
@@ -198,13 +208,19 @@ async def analyze_voice(request: Request):
     - 실패하면 아무것도 저장하지 않습니다.
     """
     # 0) 크기 제한: 조금씩 읽다가 넘으면 바로 끊음 (큰 파일을 끝까지 받지 않음)
-    if int(request.headers.get("content-length") or 0) > MAX_AUDIO_BYTES:
+    try:
+        declared_size = int(request.headers.get("content-length", "0"))
+        if declared_size < 0:
+            raise ValueError
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="녹음 요청의 길이 정보가 올바르지 않습니다.") from exc
+    if declared_size > MAX_AUDIO_BYTES:
         raise HTTPException(status_code=413, detail="녹음 파일은 3MB 이하여야 합니다.")
     audio = bytearray()
     async for chunk in request.stream():
-        audio += chunk
-        if len(audio) > MAX_AUDIO_BYTES:
+        if len(audio) + len(chunk) > MAX_AUDIO_BYTES:
             raise HTTPException(status_code=413, detail="녹음 파일은 3MB 이하여야 합니다.")
+        audio.extend(chunk)
     if not audio:
         raise HTTPException(status_code=400, detail="녹음 파일이 비어 있습니다.")
 
@@ -223,14 +239,16 @@ def _voice_to_result(audio: bytes) -> EmotionResult:
     try:
         text = stt_service.transcribe(audio)
     except ValueError as exc:  # 읽을 수 없는 녹음 파일
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="녹음 파일을 읽지 못했습니다. 다시 녹음해 주세요.") from exc
     except Exception as exc:  # 모델 실행 중 오류
-        logger.exception("받아쓰기 실패")
+        _log_model_failure("받아쓰기", exc)
         raise HTTPException(status_code=503, detail="받아쓰기 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
 
-    # ponytail: 빈 글만 막음. Whisper가 무음에서 글을 지어내면 못 막음 → 필요하면 소리 크기 검사 추가
+    # STT의 무음 검사에서 반환한 빈 문자열은 감정 분석·저장 전에 거절합니다.
     if not text.strip():
         raise HTTPException(status_code=422, detail="말소리를 알아듣지 못했어요. 다시 녹음하거나 글로 적어 주세요.")
+    if len(text) > MAX_RECORD_TEXT_LENGTH:
+        raise HTTPException(status_code=422, detail=f"받아쓴 글은 {MAX_RECORD_TEXT_LENGTH}자 이하여야 합니다.")
     return _analyze_and_save(text)
 
 
@@ -307,8 +325,10 @@ def get_today_lp(record_id: int):
     """
     con = connect()
     try:
+        # 일기/감정과 곡 목록을 같은 SQLite 스냅샷에서 읽습니다.
+        con.execute("BEGIN")
         record = con.execute(
-            "SELECT record_id, record_text, emotion_final FROM tb_record WHERE record_id = ?", (record_id,)
+            "SELECT record_id, record_text, emotion_final, mood_after FROM tb_record WHERE record_id = ?", (record_id,)
         ).fetchone()
         if record is None:
             raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
@@ -327,6 +347,7 @@ def get_today_lp(record_id: int):
         "record_id": record_id,
         "text": record["record_text"],
         "confirmed_emotion": record["emotion_final"],
+        "mood_after": record["mood_after"],
         "songs": songs,
         "note": "LP 새김은 POST /api/records/{record_id}/engrave 로 합니다(좋아요 곡만).",
     }
@@ -359,6 +380,8 @@ def update_song_feedback(
     con = connect()
     try:
         with con:
+            # 다른 PATCH가 현재 반응을 읽은 뒤 덮어쓰는 것을 막습니다.
+            con.execute("BEGIN IMMEDIATE")
             row = _feedback_row(con, record_id, recommend_order)
             if row is None:
                 raise HTTPException(status_code=404, detail="해당 기록의 추천곡을 찾을 수 없습니다.")
