@@ -3,6 +3,8 @@
 진짜 Whisper·감정 모델 대신 가짜 함수를 끼워 넣어 torch가 없는 컴퓨터에서도 돌아갑니다.
 """
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from test_analyze import FAKE_PROBS, FakeEmotionService, count_records
@@ -104,10 +106,24 @@ def test_decode_error_does_not_expose_internal_details(monkeypatch):
         assert "private decoder details" not in response.json()["detail"]
 
 
-def test_greeting_only_voice_asks_user_to_pick_emotion(monkeypatch):
-    # 잡음에서 지어낸 "고마워요."일 수도 있어서 막지 않고 확신도를 "낮음"으로 → 화면이 감정 버튼 4개를 보여 줌
-    monkeypatch.setattr(main, "stt_service", FakeSttService(text="고마워요."))
+
+def test_uncertain_transcript_is_shown_first_and_saves_nothing(monkeypatch, tmp_path):
+    # 건호 리뷰(#28): 잡음이 "고마워요."로 받아써지면 확인 전에 오늘 일기·추천곡이 덮어써지던 문제
+    monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(Path(__file__).parent / "fixtures" / "sample_song_scores.csv"))
+    stt = FakeSttService(text="고마워요.")
+    monkeypatch.setattr(main, "stt_service", stt)  # 서버가 켜질 때 받아쓰기가 준비돼 있어야 함
     with TestClient(main.app) as client:
+        record_id = client.post("/api/records", json={"text": "오늘의 진짜 일기"}).json()["record_id"]
+        assert client.post("/api/recommendations",
+                           json={"record_id": record_id, "confirmed_emotion": "좋음"}).status_code == 200
+        before = client.get(f"/api/records/{record_id}/lp").json()
+
         response = post_voice(client)
-    assert response.status_code == 201
-    assert response.json()["confidence"] == "낮음" and response.json()["text"] == "고마워요."
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert detail["code"] == "uncertain_transcript" and detail["text"] == "고마워요."
+
+        after = client.get(f"/api/records/{record_id}/lp").json()
+    assert after["text"] == "오늘의 진짜 일기"
+    assert [s["song_id"] for s in after["songs"]] == [s["song_id"] for s in before["songs"]]
+    assert count_records() == 1

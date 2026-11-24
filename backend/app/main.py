@@ -163,7 +163,7 @@ def _log_model_failure(label: str, exc: Exception) -> None:
     logger.warning("%s 실패: %s [%s]", label, type(exc).__name__, locations)
 
 
-def _analyze_and_save(text: str, low_confidence: bool = False) -> EmotionResult:
+def _analyze_and_save(text: str) -> EmotionResult:
     """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
     _check_emotion_ready()
 
@@ -181,8 +181,6 @@ def _analyze_and_save(text: str, low_confidence: bool = False) -> EmotionResult:
         # 검증 예외 본문에는 사용자의 일기나 모델 입력값이 포함될 수 있습니다.
         logger.error("감정 결과 양식 오류: %s", type(exc).__name__)
         raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
-    if low_confidence:  # 받아쓰기가 애매한 한 마디면 짐작한 감정 대신 사용자가 4개 중에서 고르게 함
-        checked = checked.model_copy(update={"confidence": "낮음"})
 
     # 3) 기록과 감정 결과를 한 번에 저장 (/api/emotions와 같은 칸에 저장)
     con = connect()
@@ -253,7 +251,14 @@ def _voice_to_result(audio: bytes) -> EmotionResult:
         raise HTTPException(status_code=422, detail="말소리를 알아듣지 못했어요. 다시 녹음하거나 글로 적어 주세요.")
     if len(text) > MAX_RECORD_TEXT_LENGTH:
         raise HTTPException(status_code=422, detail=f"받아쓴 글은 {MAX_RECORD_TEXT_LENGTH}자 이하여야 합니다.")
-    return _analyze_and_save(text, low_confidence=stt_service.is_uncertain(text))
+    if stt_service.is_uncertain(text):
+        # 인사말 한 마디: 잡음에서 지어낸 글일 수 있음 → 저장하지 않고 받아쓴 글만 돌려줌 (오늘 일기·추천곡을 덮어쓰지 않음)
+        # 화면이 "이렇게 들었어요"를 보여 주고, 사용자가 고르면 POST /api/records + 감정 직접 선택으로 저장 (건호 리뷰 #28)
+        raise HTTPException(status_code=422, detail={
+            "code": "uncertain_transcript", "text": text,
+            "message": "이렇게 들었어요. 맞으면 이대로 기록하고, 아니면 다시 녹음해 주세요.",
+        })
+    return _analyze_and_save(text)
 
 
 @app.post("/api/emotions", tags=["감정 인식 연동"])
