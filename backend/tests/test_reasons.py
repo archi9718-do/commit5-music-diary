@@ -146,3 +146,26 @@ def test_slow_agent_is_cut_at_deadline(client, monkeypatch):
     started = time.perf_counter()
     body = client.post(f"/api/records/{record_id}/reasons").json()
     assert body["source"] == "template" and time.perf_counter() - started < 0.9
+
+
+def test_queued_call_is_cancelled_after_deadline(client, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    release, calls = threading.Event(), []
+
+    def blocked(facts):
+        calls.append(1)
+        release.wait(5)
+        return {"texts": GOOD, "problems": [], "tool_calls": [], "stop": "ok"}
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(reasons, "_executor", executor)
+    monkeypatch.setattr(reasons, "write_reasons", blocked)
+    monkeypatch.setattr(reasons, "DEADLINE_SECONDS", 0.2)
+    record_id = recommend(client)
+    for _ in range(3):  # 워커 2개가 막힌 뒤 세 번째는 대기열에서 시간 초과
+        assert client.post(f"/api/records/{record_id}/reasons").json()["source"] == "template"
+    release.set()
+    executor.shutdown(wait=True)
+    assert len(calls) == 2  # 기다리는 사람이 없는 세 번째 호출은 시작되지 않음

@@ -1,6 +1,6 @@
 import React, {useEffect, useRef, useState} from "react";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
-import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons} from "./api.js";
+import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons, reasonsAction} from "./api.js";
 import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
 const PAGES={
@@ -120,6 +120,7 @@ export default function App(){
   const [index,setIndex]=useState(0),[agreed,setAgreed]=useState(false),[message,setMessage]=useState(""),[flash,setFlash]=useState("");
   const [month,setMonth]=useState(()=>localDay().slice(0,7)),[viewDay,setViewDay]=useState(""),[demo,setDemo]=useState(false);
   const pending=useRef(false), reactions=useRef(Promise.resolve()), reactionStates=useRef({});
+  const latestDraft=useRef(null); latestDraft.current=draft; // 늦게 온 이유 응답이 지금 화면 상태와 맞는지 볼 때 씀
   const unsavedCompletions=useRef(new Set());
   const [completionSaveFailed,setCompletionSaveFailed]=useState(false);
   const [busy,setBusy]=useState(false);
@@ -306,8 +307,9 @@ export default function App(){
       go("recommend");
       // 이유 한 줄은 기다리지 않음: 단계 이름이 먼저 보이고, 응답이 오면 그 칸만 바꿈
       if(!draft.demo)request(`/records/${recordId}/reasons`,"POST").then(data=>{
-        if(data.risk){go("risk");return;}
-        setDraft(old=>{const q=applyReasons(old.queue,recordId,old.recordId,data);return q?{...old,queue:q}:old;});
+        const action=reasonsAction(latestDraft.current,recordId,route(),data);
+        if(action?.type==="risk")go("risk");
+        else if(action)setDraft(old=>{const q=applyReasons(old.queue,recordId,old.recordId,data);return q?{...old,queue:q}:old;});
       }).catch(()=>{});
     },setFlash);
   }

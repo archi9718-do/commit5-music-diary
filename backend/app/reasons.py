@@ -77,9 +77,11 @@ def create_reasons(record_id: int = PathParam(gt=0)):
             "songs": songs,
             "recent_moods": [{"date": row["record_date"], "emotion": row["emotion_final"]} for row in recent],
         }
+        future = _executor.submit(write_reasons, facts)
         try:
-            result = _executor.submit(write_reasons, facts).result(timeout=DEADLINE_SECONDS)
+            result = future.result(timeout=DEADLINE_SECONDS)
         except FutureTimeout:
+            future.cancel()  # 대기열에서 아직 시작 전이면 취소 (기다리는 사람이 없는 호출 비용을 막음)
             logger.warning("추천 이유 시간 초과: %.0f초", DEADLINE_SECONDS)
             result = {"texts": None}
         except Exception as exc:  # noqa: BLE001 - 두 번째 겹: 에이전트가 예외를 던져도 템플릿

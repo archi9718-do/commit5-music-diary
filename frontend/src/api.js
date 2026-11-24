@@ -69,3 +69,11 @@ export function applyReasons(queue, sentRecordId, currentRecordId, data) {
   if (sentRecordId !== currentRecordId || ids.length !== queue.length || ids.some((id, i) => id !== queue[i].id)) return null;
   return queue.map((track, i) => ({...track, reason: data.reasons[i].text}));
 }
+
+const REASON_PAGES = ["recommend", "player", "react"];
+// 이유 응답으로 할 일. 늦게 온 응답(다른 기록·곡·화면)은 위험 이동도 반영도 하지 않음(null).
+export function reasonsAction(current, sentRecordId, page, data) {
+  const queue = applyReasons(current.queue, sentRecordId, current.recordId, data);
+  if (!queue || !REASON_PAGES.includes(page)) return null;
+  return data.risk ? {type: "risk"} : {type: "apply", queue};
+}
