@@ -18,6 +18,7 @@ MODEL = "claude-opus-5-5"
 MAX_TURNS = 4
 DEADLINE_SECONDS = 10.0  # 반복 전체의 시간 상한. 화면은 그동안 단계 이름을 보여 줌
 MAX_TOKENS = 4000
+_client = None  # 한 번 만들어 다시 씀: 요청마다 새로 만들면 매번 연결을 다시 맺어 첫 호출이 느림(11/24 11.8초)
 
 SYSTEM_PROMPT = """당신은 음악 일기 앱에서 추천곡마다 이유 한 줄을 쓰는 도우미입니다.
 도구로 오늘 확정된 감정, 추천된 3곡의 단계와 밝기·에너지, 최근 7일 감정을 확인한 뒤 씁니다.
@@ -69,6 +70,15 @@ def ready() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
+def _default_client():
+    global _client
+    if _client is None:
+        import anthropic  # SDK가 없어도 이 모듈은 불러올 수 있게 여기서 불러옴
+
+        _client = anthropic.Anthropic(max_retries=1)
+    return _client
+
+
 def _tool_results(blocks, facts: dict, called: list[str]) -> list[dict]:
     sources = {"get_today": "today", "get_songs": "songs", "get_recent_moods": "recent_moods"}
     results = []
@@ -94,9 +104,7 @@ def write_reasons(facts: dict, *, client=None) -> dict:
 
     try:
         if client is None:
-            import anthropic  # SDK가 없어도 이 모듈은 불러올 수 있게 여기서 불러옴
-
-            client = anthropic.Anthropic(max_retries=1)
+            client = _default_client()
         deadline = time.monotonic() + DEADLINE_SECONDS
         messages = [{"role": "user", "content": FIRST_MESSAGE}]
         for _ in range(MAX_TURNS):

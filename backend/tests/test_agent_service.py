@@ -152,3 +152,20 @@ def test_usage_is_summed_across_calls():
     last.usage = SimpleNamespace(input_tokens=150, output_tokens=60)
     result = write_reasons(FACTS, client=FakeClient([first, last]))
     assert result["usage"] == {"input_tokens": 250, "output_tokens": 80}
+
+
+def test_default_client_is_created_once_and_reused(monkeypatch):
+    anthropic = pytest.importorskip("anthropic")
+    from ai.agent import service
+
+    made = []
+
+    def factory(**kwargs):
+        made.append(kwargs)
+        return FakeClient([final_json(GOOD), final_json(GOOD)])
+
+    monkeypatch.setattr(service, "_client", None)
+    monkeypatch.setattr(anthropic, "Anthropic", factory)
+    assert service.write_reasons(FACTS)["texts"] == GOOD
+    assert service.write_reasons(FACTS)["texts"] == GOOD
+    assert len(made) == 1  # 연결을 다시 맺지 않도록 같은 클라이언트를 다시 씀
