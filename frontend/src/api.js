@@ -1,4 +1,5 @@
 import {MOODS, recommend} from "./domain.js";
+import {participantHeader} from "./participant.js";
 
 // 음원 전용 화면에서는 ngrok 로그인과 음원 API가 같은 주소를 사용합니다.
 const base = import.meta.env?.VITE_AUDIO_DEMO_ONLY === "1"
@@ -11,11 +12,11 @@ export async function request(path, method = "GET", body) {
     method,
     signal: AbortSignal.timeout(30000),
     // 녹음(Blob)은 JSON 대신 본문 그대로 보냄 (POST /records/voice는 raw body)
-    ...(body === undefined ? {} : body instanceof Blob ? {
-      headers: {"Content-Type": body.type || "application/octet-stream"},
+    ...(body === undefined ? {headers: participantHeader()} : body instanceof Blob ? {
+      headers: {"Content-Type": body.type || "application/octet-stream", ...participantHeader()},
       body,
     } : {
-      headers: {"Content-Type": "application/json"},
+      headers: {"Content-Type": "application/json", ...participantHeader()},
       body: JSON.stringify(body),
     }),
   });
