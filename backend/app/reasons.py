@@ -5,6 +5,8 @@
 
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import closing
 from pathlib import Path
 
@@ -32,6 +34,11 @@ except Exception:  # noqa: BLE001
 
 logger = logging.getLogger("moodwave")
 router = APIRouter(prefix="/api/records", tags=["추천 이유"])
+
+# SDK timeout은 동작 하나(연결·읽기)마다 걸려서 여러 번 부르는 전체 시간을 못 막음. 여기서 전체를 끊음.
+# ponytail: 시간을 넘긴 호출은 뒤에서 끝까지 돌고(비용 발생) 결과만 버림. 자주 넘기면 반복 횟수를 줄이기
+DEADLINE_SECONDS = 10.0
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="reasons")
 
 
 @router.post("/{record_id}/reasons", response_model=ReasonsResponse)
@@ -71,7 +78,10 @@ def create_reasons(record_id: int = PathParam(gt=0)):
             "recent_moods": [{"date": row["record_date"], "emotion": row["emotion_final"]} for row in recent],
         }
         try:
-            result = write_reasons(facts)
+            result = _executor.submit(write_reasons, facts).result(timeout=DEADLINE_SECONDS)
+        except FutureTimeout:
+            logger.warning("추천 이유 시간 초과: %.0f초", DEADLINE_SECONDS)
+            result = {"texts": None}
         except Exception as exc:  # noqa: BLE001 - 두 번째 겹: 에이전트가 예외를 던져도 템플릿
             logger.warning("추천 이유 실패: %s", type(exc).__name__)
             result = {"texts": None}

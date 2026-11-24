@@ -131,3 +131,18 @@ def test_recent_moods_only_same_user_previous_7_days(client, agent):
         yesterday = con.execute("SELECT date(?, '-1 days')", (today,)).fetchone()[0]
     client.post(f"/api/records/{record_id}/reasons")
     assert agent.facts[0]["recent_moods"] == [{"date": yesterday, "emotion": "예민함"}]
+
+
+def test_slow_agent_is_cut_at_deadline(client, monkeypatch):
+    import time
+
+    def slow(facts):
+        time.sleep(1.0)
+        return {"texts": GOOD, "problems": [], "tool_calls": [], "stop": "ok"}
+
+    monkeypatch.setattr(reasons, "write_reasons", slow)
+    monkeypatch.setattr(reasons, "DEADLINE_SECONDS", 0.2)
+    record_id = recommend(client)
+    started = time.perf_counter()
+    body = client.post(f"/api/records/{record_id}/reasons").json()
+    assert body["source"] == "template" and time.perf_counter() - started < 0.9
