@@ -1,0 +1,37 @@
+"""평가 스크립트의 경우 만들기·요약 시험 (API를 부르지 않음)."""
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from ai.agent.eval import build_cases, summarize
+
+
+def test_build_cases_covers_emotions_and_histories():
+    cases = build_cases()
+    assert len(cases) == 12
+    assert {c["facts"]["today"]["confirmed_emotion"] for c in cases} == {"좋음", "무난함", "가라앉음", "예민함"}
+    assert {len(c["facts"]["recent_moods"]) for c in cases} == {0, 3}
+    assert all(len(c["facts"]["songs"]) == 3 for c in cases)
+    sad = next(c for c in cases if c["facts"]["today"]["confirmed_emotion"] == "가라앉음")
+    assert [s["step"] for s in sad["facts"]["songs"]] == ["맞추기", "조금 밝게", "더 밝게"]
+
+
+def test_summarize_counts_format_and_problems():
+    rows = [
+        {"stop": "ok", "problems": [], "tool_calls": ["get_today", "get_songs"], "usage": {"input_tokens": 1000, "output_tokens": 100}},
+        {"stop": "checker", "problems": ["format", "song:피아노"], "tool_calls": ["get_songs"], "usage": {"input_tokens": 1000, "output_tokens": 100}},
+        {"stop": "checker", "problems": ["emotion:신나"], "tool_calls": [], "usage": {"input_tokens": 0, "output_tokens": 0}},
+        {"stop": "error:ConnectionError", "problems": [], "tool_calls": [], "usage": {"input_tokens": 0, "output_tokens": 0}},
+    ]
+    s = summarize(rows)
+    assert s["runs"] == 4
+    assert s["format_rate"] == 0.5  # 전체 실행 중 답을 받았고 형식 문제가 없는 비율 (오류·시간 초과는 실패로 셈)
+    assert s["pass_rate"] == 0.25
+    assert s["problem_counts"] == {"format": 1, "song:피아노": 1, "emotion:신나": 1}
+    assert s["stop_counts"] == {"ok": 1, "checker": 2, "error:ConnectionError": 1}
+    assert s["avg_tool_calls"] == 0.75
+    assert abs(s["cost_usd"] - (2000 * 4 + 200 * 20) / 1_000_000) < 1e-9

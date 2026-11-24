@@ -144,3 +144,11 @@ def test_recent_mood_word_allowed_only_with_history():
     assert write_reasons(FACTS, client=FakeClient([final_json(texts)]))["stop"] == "checker"
     facts = {**FACTS, "recent_moods": [{"date": "2026-11-23", "emotion": "가라앉음"}]}
     assert write_reasons(facts, client=FakeClient([final_json(texts)]))["texts"] == texts
+
+
+def test_usage_is_summed_across_calls():
+    first, last = tool_use("get_songs"), final_json(GOOD)
+    first.usage = SimpleNamespace(input_tokens=100, output_tokens=20)
+    last.usage = SimpleNamespace(input_tokens=150, output_tokens=60)
+    result = write_reasons(FACTS, client=FakeClient([first, last]))
+    assert result["usage"] == {"input_tokens": 250, "output_tokens": 80}

@@ -85,11 +85,12 @@ def _tool_results(blocks, facts: dict, called: list[str]) -> list[dict]:
 
 
 def write_reasons(facts: dict, *, client=None) -> dict:
-    """{"texts": 3줄 또는 None, "problems": [...], "tool_calls": [...], "stop": "..."}. 예외를 던지지 않습니다."""
+    """{"texts": 3줄 또는 None, "problems": [...], "tool_calls": [...], "stop": "...", "usage": {...}}. 예외를 던지지 않습니다."""
     called: list[str] = []
+    usage = {"input_tokens": 0, "output_tokens": 0}  # 평가 스크립트의 비용 계산용
 
     def done(stop: str, texts=None, problems=None) -> dict:
-        return {"texts": texts, "problems": problems or [], "tool_calls": called, "stop": stop}
+        return {"texts": texts, "problems": problems or [], "tool_calls": called, "stop": stop, "usage": usage}
 
     try:
         if client is None:
@@ -112,6 +113,8 @@ def write_reasons(facts: dict, *, client=None) -> dict:
                 betas=["server-side-fallback-2026-07-01"],
                 fallbacks="default",
             )
+            for key in usage:
+                usage[key] += getattr(getattr(response, "usage", None), key, 0) or 0
             if response.stop_reason == "refusal":
                 return done("refusal")
             tool_blocks = [b for b in response.content if b.type == "tool_use"]
