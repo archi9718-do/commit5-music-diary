@@ -63,3 +63,15 @@ def test_recheck_counts_direction_errors_and_human_labels(tmp_path):
         writer.writerow(["가라앉음-none", 4, "error:ConnectionError", "", "", 1.0, "", "", "", ""])
     result = recheck(path)
     assert result == {"checked": 3, "direction_errors": 1, "human_labeled": 2, "human_errors": 1}
+
+
+def test_build_cases_can_use_real_recommended_songs():
+    from ai.agent.eval import build_cases
+
+    fixture = REPO_ROOT / "backend" / "tests" / "fixtures" / "sample_song_scores.csv"
+    cases = build_cases(score_csv=fixture)
+    good = next(c for c in cases if c["name"] == "좋음-none")["facts"]["songs"]
+    # 실제 추천은 목표 좌표에서 벗어남: 좋음 1·2번 곡은 deam_8(0.81, 0.69) → deam_9(0.78, 0.72)
+    assert [s["song_id"] for s in good] == ["deam_8", "deam_9", "deam_10"]
+    assert (good[0]["brightness"], good[1]["brightness"]) == (0.81, 0.78)
+    assert len(cases) == 12

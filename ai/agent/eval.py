@@ -23,7 +23,11 @@ for path in (REPO_ROOT, REPO_ROOT / "backend"):
 from ai.agent.rules import check_reasons, is_risk
 from ai.agent.service import DEADLINE_SECONDS, write_reasons
 
-from app.recommender import TARGETS  # 추천과 같은 단계 이름·좌표를 씀
+from app.recommender import (  # 추천과 같은 단계 이름·좌표를 씀
+    TARGETS,
+    load_song_scores,
+    recommend_three,
+)
 
 PRICE_PER_MTOK = {"input_tokens": 4.0, "output_tokens": 20.0}  # claude-opus-5-5, US$
 ESTIMATE_PER_RUN_USD = 0.02  # 11/24 측정: 24회 $0.435 (1회 약 $0.018)
@@ -32,8 +36,14 @@ RISK_FIXTURE = REPO_ROOT / "backend" / "tests" / "fixtures" / "risk_sentences.js
 OUT_DIR = Path(os.environ.get("MOODWAVE_AGENT_EVAL_DIR", r"C:\work\moodwave_data\agent_eval"))
 
 
-def build_cases() -> list[dict]:
-    """감정 4종 × 최근 7일 (없음 / 같은 감정 3일 / 감정 3종 섞임) = 12경우."""
+def build_cases(score_csv: Path | None = None) -> list[dict]:
+    """감정 4종 × 최근 7일 (없음 / 같은 감정 3일 / 감정 3종 섞임) = 12경우.
+
+    score_csv를 주면 목표 좌표 대신 그 점수표로 실제 추천한 곡을 씀. 실제 곡은 목표에서 벗어나므로
+    "앞 곡보다 더 밝게" 같은 방향 오류가 생길 수 있는 경우를 시험함 (건호 리뷰).
+    """
+    # 공개 시연과 같게 DEAM 곡만 (MOODWAVE_RECOMMEND_SCOPE=DEAM)
+    catalog = [s for s in load_song_scores(Path(score_csv)) if s.dataset == "DEAM"] if score_csv else None
     histories = {
         "none": lambda emotion: [],
         "same": lambda emotion: [{"date": f"2026-11-{d}", "emotion": emotion} for d in (20, 21, 22)],
@@ -42,8 +52,13 @@ def build_cases() -> list[dict]:
     }
     cases = []
     for emotion in EMOTIONS:
-        songs = [{"recommend_order": i, "song_id": f"deam_eval{i}", "step": step, "brightness": v, "energy": a}
-                 for i, (v, a, step) in enumerate(TARGETS[emotion], 1)]
+        if catalog:
+            songs = [{"recommend_order": i, "song_id": song.song_id, "step": song.step,
+                      "brightness": song.brightness, "energy": song.energy}
+                     for i, song in enumerate(recommend_three(emotion, candidates=catalog), 1)]
+        else:
+            songs = [{"recommend_order": i, "song_id": f"deam_eval{i}", "step": step, "brightness": v, "energy": a}
+                     for i, (v, a, step) in enumerate(TARGETS[emotion], 1)]
         for name, history in histories.items():
             cases.append({"name": f"{emotion}-{name}", "facts": {
                 "today": {"confirmed_emotion": emotion, "taste_side": None},
@@ -79,13 +94,13 @@ def _timing(seconds: list[float]) -> dict:
             "over_deadline_rate": sum(s > DEADLINE_SECONDS for s in seconds) / len(seconds)}
 
 
-def recheck(csv_path: Path) -> dict:
+def recheck(csv_path: Path, score_csv: Path | None = None) -> dict:
     """이미 돌린 결과 CSV를 지금 검사기(방향 검사 포함)로 다시 봅니다. API를 부르지 않습니다.
 
     검사기 통과(stop=ok)와 사실 정확도를 나눠 보기 위한 것: direction_errors는 자동으로 잡은 사실 오류,
     human_errors는 사람이 hallucination 칸에 1을 적은 줄 수입니다.
     """
-    facts = {case["name"]: case["facts"] for case in build_cases()}
+    facts = {case["name"]: case["facts"] for case in build_cases(score_csv)}  # 실행 때와 같은 --scores를 줘야 함
     result = {"checked": 0, "direction_errors": 0, "human_labeled": 0, "human_errors": 0}
     with Path(csv_path).open(encoding="utf-8-sig", newline="") as handle:
         for row in csv.DictReader(handle):
@@ -114,12 +129,13 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=10, help="경우마다 반복 횟수 (기본 10 → 120회)")
     parser.add_argument("--yes", action="store_true", help="비용 확인 없이 바로 실행")
     parser.add_argument("--recheck", type=Path, help="이미 돌린 CSV를 지금 검사기로 다시 보기 (API 호출 없음)")
+    parser.add_argument("--scores", type=Path, help="목표 좌표 대신 이 점수표 CSV로 실제 추천한 곡을 씀")
     args = parser.parse_args()
     if args.recheck:
-        print(json.dumps(recheck(args.recheck), ensure_ascii=False, indent=2))
+        print(json.dumps(recheck(args.recheck, args.scores), ensure_ascii=False, indent=2))
         return
 
-    cases = build_cases()
+    cases = build_cases(args.scores)
     total = len(cases) * args.runs
     print(f"{len(cases)}경우 × {args.runs}번 = {total}회 호출, 예상 약 ${total * ESTIMATE_PER_RUN_USD:.2f}")
     if not args.yes and input("진행할까요? (y/N) ").strip().lower() != "y":
