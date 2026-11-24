@@ -9,7 +9,8 @@ import unicodedata
 # backend/tests/fixtures/risk_sentences.json으로 두 쪽 시험을 모두 돌립니다.
 RISK_PATTERNS = tuple(re.compile(p) for p in (
     r"죽고\s*싶", r"죽어\s*버리고\s*싶", r"살고\s*싶지\s*않", r"목숨을\s*끊",
-    r"자해(?:하|를|할|했)", r"자살(?:하|할|을|하고|해야)", r"스스로를\s*해치",
+    r"자해(?:하|를|할|했)", r"자살(?:하|할|을|하고|해야)", r"스스로를\s*해(?:치|칠|쳤)",
+    r"자해\s*충동", r"자살\s*생각",
 ))
 
 LINE_PATTERN = re.compile(r"^[가-힣 .,!?·]+$")  # 한글·띄어쓰기·문장부호만: 숫자·영문·이모지·따옴표 막음
