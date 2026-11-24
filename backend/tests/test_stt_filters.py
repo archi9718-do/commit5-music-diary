@@ -1,6 +1,7 @@
 """받아쓰기 무음·잡음 거름 시험. 모델을 불러오지 않고 판단 함수만 봅니다.
 
-11/24 실제 크롬 녹음 9개로 다시 맞춘 값: 무음 비율 2.8, TV 소리 5.9, 작게 말하기 11.5.
+11/24 실제 크롬 녹음: 무음 비율 2.8, TV 소리 5.9, 작게 말하기 11.5. 11/19 데이터셋 정상 발화 최솟값 3.3.
+건호 리뷰(#28) 뒤 기준 3.0: 무음은 막고 정상 발화는 막지 않음. 기준을 넘은 잡음은 문장 검사·인사말 검사가 맡음.
 """
 
 import sys
@@ -29,13 +30,13 @@ def burst_signal(ratio: float) -> np.ndarray:
     return (amplitude * np.sin(2 * np.pi * 400 * t)).astype(np.float32)
 
 
-@pytest.mark.parametrize("ratio", [2.8, 5.9])
-def test_chrome_silence_and_tv_ratios_are_not_speech(ratio):
-    assert not has_speech(burst_signal(ratio))
+def test_chrome_silence_is_not_speech():
+    assert not has_speech(burst_signal(2.8))
 
 
-def test_quiet_speech_ratio_is_speech():
-    assert has_speech(burst_signal(11.5))
+@pytest.mark.parametrize("ratio", [3.3, 11.5])  # 데이터셋 정상 발화 최솟값, 크롬에서 작게 말하기
+def test_low_ratio_real_speech_is_speech(ratio):
+    assert has_speech(burst_signal(ratio))
 
 
 # 건호 리뷰(#28): 문구가 "들어 있기만" 해도 막으면 정상 일기도 막힘 → 실제로 관찰된 문장 전체만 막음
