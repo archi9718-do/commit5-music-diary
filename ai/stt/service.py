@@ -4,6 +4,7 @@
 # 녹음은 메모리(bytes)로만 받고 디스크에 쓰지 않습니다 → 처리 뒤 원본이 남지 않습니다.
 import io
 import os
+import re
 from itertools import chain
 
 import av
@@ -26,8 +27,12 @@ GEN_KW = {"language": "korean", "task": "transcribe"}
 # 11/24 실제 크롬 녹음: 무음 2.8, TV 소리 5.9, 작게 말하기 11.5 → 6.0 (크롬 잡음 억제로 조용한 쪽이 거의 0이 됨)
 # 키보드 18.5, 선풍기 34.3은 비율로 못 가름(작게 말하기보다 큼) → 아래 문구 목록이 막음
 MIN_SPEECH_RATIO = 6.0
-HALLUCINATION_PARTS = ("자막", "시청해 주셔서", "시청해주셔서", "구독과 좋아요", "좋아요 부탁")  # 들어 있으면 지어낸 글
-HALLUCINATION_ONLY = ("감사합니다", "수고하셨습니다", "고마워요")  # 이 말만 단독으로 나오면 지어낸 글
+# 지어낸 글은 실제로 관찰된 "문장 전체"만 막음 (띄어쓰기·문장부호는 무시). 문구가 들어 있기만 한 정상 일기는 통과
+# (11/24 건호 리뷰: "친구가 좋아요 부탁한다고 해서 웃었어요"가 막히던 문제)
+HALLUCINATION_SENTENCES = ("구독과좋아요부탁드립니다", "시청해주셔서감사합니다")
+HALLUCINATION_PREFIXES = ("한글자막",)  # 무음에서 "한글자막 제공 및 ..."처럼 뒤가 바뀌며 나옴
+# 인사말 한 마디: 잡음에서 지어낸 것인지 실제로 말한 것인지 글로는 구분할 수 없음 → 막지 않고 감정을 사용자가 고르게 함
+GREETING_ONLY = ("감사합니다", "수고하셨습니다", "고마워요")
 
 _asr = None
 
@@ -90,10 +95,20 @@ def transcribe(audio_bytes: bytes) -> str:
     return "" if is_hallucination(text) else text
 
 
+def _compact(text: str) -> str:
+    return re.sub(r"[\s.,!?~]", "", text)
+
+
 def is_hallucination(text: str) -> bool:
-    """무음·잡음에서 Whisper가 자주 지어내는 문구면 True."""
-    # ponytail: 아는 문구만 막음(11/24 키보드·선풍기 문구 추가). 새 문구가 또 나오면 음성 구간 검출(VAD)로 바꾸기
-    return any(h in text for h in HALLUCINATION_PARTS) or text.strip(" .!") in HALLUCINATION_ONLY
+    """무음·잡음에서 Whisper가 지어낸 것으로 확인된 문장 전체면 True."""
+    # ponytail: 관찰된 문장만 막음(11/24 크롬 녹음). 새 문장이 또 나오면 음성 구간 검출(VAD)로 바꾸기
+    compact = _compact(text)
+    return compact in HALLUCINATION_SENTENCES or compact.startswith(HALLUCINATION_PREFIXES)
+
+
+def is_uncertain(text: str) -> bool:
+    """인사말 한 마디만 받아썼으면 True. 서버는 확신도를 "낮음"으로 낮춰 사용자가 감정을 고르게 합니다."""
+    return _compact(text) in GREETING_ONLY
 
 
 def has_speech(audio: np.ndarray) -> bool:

@@ -24,6 +24,9 @@ class FakeSttService:
             raise self.error
         return self.text
 
+    def is_uncertain(self, text):  # 진짜 규칙은 test_stt_filters.py가 시험함
+        return text == "고마워요."
+
 
 @pytest.fixture(autouse=True)
 def isolated_env(monkeypatch, tmp_path):
@@ -99,3 +102,12 @@ def test_decode_error_does_not_expose_internal_details(monkeypatch):
         response = post_voice(client, b"invalid")
         assert response.status_code == 400
         assert "private decoder details" not in response.json()["detail"]
+
+
+def test_greeting_only_voice_asks_user_to_pick_emotion(monkeypatch):
+    # 잡음에서 지어낸 "고마워요."일 수도 있어서 막지 않고 확신도를 "낮음"으로 → 화면이 감정 버튼 4개를 보여 줌
+    monkeypatch.setattr(main, "stt_service", FakeSttService(text="고마워요."))
+    with TestClient(main.app) as client:
+        response = post_voice(client)
+    assert response.status_code == 201
+    assert response.json()["confidence"] == "낮음" and response.json()["text"] == "고마워요."
