@@ -75,6 +75,7 @@
 | 5 | `GET` | `/api/records/{record_id}/lp` | `200` | LP 기록·추천곡·반응 조회 | 프론트엔드 |
 | 6 | `PATCH` | `/api/records/{record_id}/songs/{recommend_order}` | `200` | 좋아요·건너뛰기·완청 저장 (3.6.1) | 프론트엔드 |
 | 7 | `POST` | `/api/records/{record_id}/engrave` | `200` | 좋아요 곡만 LP에 새기기 (3.6.2) | 프론트엔드 |
+| 8 | `POST` | `/api/records/{record_id}/reasons` | `200` | 곡별 추천 이유 한 줄 (3.8) | 프론트엔드 |
 
 ### 3.1. 기록 생성 — `POST /api/records`
 
@@ -483,6 +484,31 @@ DB v5의 `flow_ended_at`, `mood_asked_at`, `mood_after`를 사용합니다.
 - 동시 응답도 최초 하나만 저장, 실패한 요청은 DB 변경 없음
 - 같은 날 재기록·재추천 후 질문·응답 보존, 다음 날 새 기록, 서버 재시작 후 상태 유지
 - 기존 곡별 409·LP 새김·감정 분석 대체 흐름과 전체 pytest·Ruff 통과
+
+### 3.8. 곡별 추천 이유 — `POST /api/records/{record_id}/reasons` (추가 경로, 상현)
+
+추천을 받은 뒤 화면이 **기다리지 않고** 부릅니다. 추천 화면은 단계 이름(`step`)으로 먼저 보이고, 응답이 오면 이유 칸만 바꿉니다. 설계: `docs/superpowers/specs/2026-11-24-recommendation-reason-agent-design.md`
+
+- 요청 본문 없음
+- Claude API 에이전트가 도구 3개(오늘 감정, 추천 3곡의 단계·밝기·에너지, 최근 7일 감정)로 사실을 확인한 뒤 곡마다 한 줄을 씁니다. **일기 원문은 보내지 않습니다**
+- 검사기(형식·금지 표현·사실 확인)를 통과하지 못하거나, 키가 없거나, 10초 안에 끝나지 않으면 템플릿 문장을 돌려줍니다 (`source: "template"`)
+- 기록 글에 위험 표현이 있으면 LLM을 부르지 않고 `risk: true`. 화면은 109 안내 화면으로 보냅니다
+- 결과는 **DB에 저장하지 않습니다**. 같은 기록으로 다시 부르면 다시 만듭니다
+
+```json
+{
+  "source": "agent",
+  "risk": false,
+  "reasons": [
+    {"recommend_order": 1, "song_id": "deam_2", "text": "지금 마음처럼 낮고 잔잔한 곡으로 시작해요."},
+    {"recommend_order": 2, "song_id": "deam_3", "text": "밝기를 조금 올려 천천히 이어가요."},
+    {"recommend_order": 3, "song_id": "deam_4", "text": "한결 밝은 곡으로 오늘을 마무리해요."}
+  ]
+}
+```
+
+- `song_id`: 그사이 같은 기록으로 다시 추천받아 곡이 바뀌었으면 화면이 이 응답을 버릴 수 있게 넣었습니다
+- `404`: 기록이 없음 / `409`: 아직 추천 전
 
 ## 4. 대표 오류 처리
 
