@@ -74,6 +74,8 @@
 - 헤더가 **있으면** 코드마다 회원(`participant-<코드>@moodwave.local`)을 찾거나 만듭니다. 새 테이블은 없습니다.
 - 형식은 `^[A-Z0-9]{4}$`. 틀리면 **422**이고 아무것도 저장하지 않습니다.
 - **본인 기록만**: 경로에 `{record_id}`가 있는 API 전부와 본문에 `record_id`가 있는 `POST /api/emotions`·`POST /api/recommendations`는, 다른 참여자(또는 헤더 없는 시연 회원)의 기록이면 **404**를 돌려줍니다.
+  - 경로의 주인 확인은 FastAPI가 검증한 그 `record_id`로 합니다 (`backend/app/owner.py`의 `owned_record`). 잘못된 id(`0`, `-1`, `abc`, `²`)는 **422**입니다.
+- 화면의 **다음 참여자로 시작**은 `localStorage`와 `sessionStorage`의 `moodwave.mvp.*`를 모두 지웁니다 (감상 후 "이어서 하기" 정보 포함).
 - 최근 7일 추천곡 제외도 참여자별로 계산됩니다 (같은 `user_id` 기준).
 - 참여자 코드는 **인증이 아닙니다**. 헤더는 바꿀 수 있으므로, 참여자끼리 기록이 섞이지 않게 하는 용도로만 씁니다.
 

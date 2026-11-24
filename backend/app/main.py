@@ -4,9 +4,8 @@ import sys
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from traceback import extract_tb
-from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
@@ -14,14 +13,13 @@ from starlette.concurrency import run_in_threadpool
 
 from .audio import router as audio_router
 from .db import (
-    PARTICIPANT_PATTERN,
     connect,
     ensure_song,
     get_user_id,
     init_db,
-    record_owner,
     save_today_record,
 )
+from .owner import Participant, owned_record, require_owner
 from .post_listening import router as post_listening_router
 from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
@@ -103,32 +101,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-# 형식이 틀린 코드는 FastAPI가 422로 막습니다 (헤더는 사용자가 바꿀 수 있는 입력).
-Participant = Annotated[str | None, Header(alias="X-Participant", pattern=PARTICIPANT_PATTERN)]
-
-
-def require_owner(con, record_id: int, participant: str | None) -> None:
-    """다른 참여자의 기록이면 없는 기록처럼 404 (있는지도 알려 주지 않음)."""
-    owner = record_owner(con, record_id)
-    if owner is None or owner != get_user_id(con, participant):
-        raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
-
-
-def guard_record_owner(request: Request, x_participant: Participant = None) -> None:
-    """경로에 {record_id}가 있는 모든 API(판·반응·새김·감상 후 기분 등)에 걸리는 주인 확인."""
-    raw = request.path_params.get("record_id")
-    if raw is None or not str(raw).isdigit() or int(raw) <= 0:
-        return  # 형식 오류는 각 경로의 검사가 422로 알려 줌
-    with closing(connect()) as con, con:
-        require_owner(con, int(raw), x_participant)
-
-
 app = FastAPI(
     title="MoodWave Backend (MVP)",
     description="감정 결과 -> 점수 기반 3곡 추천 -> 그날의 판 저장용 개발 서버",
     version="0.1.0",
     lifespan=lifespan,
-    dependencies=[Depends(guard_record_owner)],
 )
 app.include_router(post_listening_router)
 app.include_router(audio_router)
@@ -350,7 +327,7 @@ def create_recommendations(payload: RecommendationRequest, x_participant: Partic
     return {"songs": songs}
 
 
-@app.get("/api/records/{record_id}/lp", tags=["오늘의 판"])
+@app.get("/api/records/{record_id}/lp", tags=["오늘의 판"], dependencies=[Depends(owned_record)])
 def get_today_lp(record_id: int):
     """오늘의 판: 기록과 추천곡 3개, 곡별 반응을 함께 돌려줍니다.
 
@@ -398,6 +375,7 @@ def _feedback_row(con, record_id: int, recommend_order: int):
 @app.patch(
     "/api/records/{record_id}/songs/{recommend_order}",
     response_model=SongFeedback,
+    dependencies=[Depends(owned_record)],
     tags=["추천곡 반응"],
 )
 def update_song_feedback(
@@ -442,6 +420,7 @@ def update_song_feedback(
 @app.post(
     "/api/records/{record_id}/engrave",
     response_model=list[SongFeedback],
+    dependencies=[Depends(owned_record)],
     tags=["추천곡 반응"],
 )
 def engrave_liked_songs(payload: EngraveRequest | None = None, record_id: int = PathParam(gt=0)):
