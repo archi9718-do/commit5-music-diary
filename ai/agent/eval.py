@@ -8,7 +8,9 @@ import argparse
 import csv
 import json
 import os
+import statistics
 import sys
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +21,7 @@ for path in (REPO_ROOT, REPO_ROOT / "backend"):
         sys.path.insert(0, str(path))
 
 from ai.agent.rules import is_risk
-from ai.agent.service import write_reasons
+from ai.agent.service import DEADLINE_SECONDS, write_reasons
 
 from app.recommender import TARGETS  # 추천과 같은 단계 이름·좌표를 씀
 
@@ -65,7 +67,16 @@ def summarize(rows: list[dict]) -> dict:
         "stop_counts": dict(Counter(r["stop"] for r in rows)),
         "avg_tool_calls": sum(len(r["tool_calls"]) for r in rows) / runs if runs else 0.0,
         "cost_usd": sum(tokens[k] * PRICE_PER_MTOK[k] for k in tokens) / 1_000_000,
+        **_timing([r["seconds"] for r in rows if "seconds" in r]),
     }
+
+
+def _timing(seconds: list[float]) -> dict:
+    if not seconds:
+        return {}
+    # 서버 경로(backend/app/reasons.py)도 같은 10초에서 끊으므로, 넘은 비율 = 시연 때 템플릿이 나갈 비율
+    return {"median_seconds": statistics.median(seconds), "max_seconds": max(seconds),
+            "over_deadline_rate": sum(s > DEADLINE_SECONDS for s in seconds) / len(seconds)}
 
 
 def risk_agreement() -> float:
@@ -91,16 +102,18 @@ def main() -> None:
     rows = []
     with out_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["case", "run", "stop", "problems", "tool_calls", "text1", "text2", "text3", "hallucination"])
+        writer.writerow(["case", "run", "stop", "problems", "tool_calls", "seconds", "text1", "text2", "text3", "hallucination"])
         for case in cases:
             for run in range(1, args.runs + 1):
+                started = time.perf_counter()
                 result = write_reasons(case["facts"])
+                result["seconds"] = round(time.perf_counter() - started, 2)
                 rows.append(result)
                 texts = result["texts"] or ["", "", ""]
                 writer.writerow([case["name"], run, result["stop"], " ".join(result["problems"]),
-                                 " ".join(result["tool_calls"]), *texts, ""])
+                                 " ".join(result["tool_calls"]), result["seconds"], *texts, ""])
                 handle.flush()
-                print(f"{len(rows)}/{total} {case['name']} #{run}: {result['stop']}")
+                print(f"{len(rows)}/{total} {case['name']} #{run}: {result['stop']} {result['seconds']}s")
 
     summary = summarize(rows)
     print(json.dumps(summary, ensure_ascii=False, indent=2))

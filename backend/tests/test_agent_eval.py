@@ -35,3 +35,11 @@ def test_summarize_counts_format_and_problems():
     assert s["stop_counts"] == {"ok": 1, "checker": 2, "error:ConnectionError": 1}
     assert s["avg_tool_calls"] == 0.75
     assert abs(s["cost_usd"] - (2000 * 4 + 200 * 20) / 1_000_000) < 1e-9
+
+
+def test_summarize_reports_time_and_over_deadline_rate():
+    base = {"stop": "ok", "problems": [], "tool_calls": [], "usage": {"input_tokens": 0, "output_tokens": 0}}
+    rows = [{**base, "seconds": s} for s in (3.0, 5.0, 12.0, 4.0)]
+    s = summarize(rows)
+    assert s["median_seconds"] == 4.5 and s["max_seconds"] == 12.0
+    assert s["over_deadline_rate"] == 0.25  # 서버 경로 10초 상한을 넘으면 화면엔 템플릿이 나감
