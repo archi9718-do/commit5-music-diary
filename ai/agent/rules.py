@@ -23,6 +23,20 @@ FORBIDDEN = (
     "힘내", "해야", "하세요",  # 명령·훈계
     "친구", "가족", "회사", "학교", "시험",  # 다른 사람·일기 내용 추측
 )
+# 곡이 기분·몸을 바꿔 준다는 말. 도구 결과에 없는 내용이라 11/25 판정에서 지어낸 말로 봄 (26/143)
+# 건호 리뷰(#34): "마음이" 같은 조각이 아니라 "기분·마음이 + 바뀐다"는 서술을 봄. "마음이 담긴 듯한 곡"은 분위기 묘사
+# ponytail: 규칙이라 처음 보는 표현은 통과할 수 있음. 재평가에서 나오면 더하기
+_CHANGE = (
+    r"(?:좋아[져지질진]|나아[져지]|편(?:안)?해[져지]|가벼워|차분해[져지]|\S+게 (?:해|만들)|어루만|안아|잠재"
+    r"|밝아|밝혀|환하게|맑아|올라|들어 ?올|끌어 ?올|띄[우워]|누그러|풀어|풀[려리]|덜어|내려놓|가라앉[혀히]|녹[아이여]|놓[여이]"
+    r"|이끌|이끄|달래|다독|감싸|바꿔|바꾸|바뀌|전환|머금게)"
+)
+EFFECT_PATTERNS = tuple(re.compile(p) for p in (
+    # 사용자의 상태 + (사이 낱말 2개까지) + 바뀐다는 말. "마음이 담긴/닮은/느껴지는 …"은 곡 묘사라 뺌
+    rf"(?:기분|마음|감정|예민함|날카로움|긴장|날 ?선 기운)(?:[이가을를도은는])? (?!담|닮|느껴)(?:\S+ ){{0,2}}{_CHANGE}",
+    rf"(?:들으면|듣다 보면|듣고 나면) (?:\S+ ){{0,3}}{_CHANGE}",
+    r"숨을 ?고|감싸|누그러|머금게|데려가|쪽으로 이끌|위로(?:가|를|해|받)|힘이 되|힘을 [주줘]",
+))
 # 확정 감정이 아닌 감정의 단어가 나오면 탈락 (도구 결과와 다른 감정을 지어냄)
 EMOTION_WORDS = {
     "좋음": ("신나", "기쁜", "기뻐", "행복", "들뜬", "설레"),
@@ -55,7 +69,7 @@ TEMPLATES = {
     ("가라앉음", "조금 밝게"): "밝기를 조금 올려 천천히 이어가요.",
     ("가라앉음", "더 밝게"): "한결 밝은 곡으로 오늘을 마무리해요.",
     ("예민함", "맞추기"): "지금의 높은 긴장과 닮은 곡으로 시작해요.",
-    ("예민함", "에너지 낮추기"): "에너지를 낮춘 곡으로 숨을 고르게 해요.",
+    ("예민함", "에너지 낮추기"): "에너지를 낮춘 곡으로 천천히 이어가요.",
     ("예민함", "차분하고 조금 밝게"): "차분하고 조금 밝은 곡으로 마무리해요.",
 }
 # 2·3번째 템플릿이 앞 곡과 비교해 주장하는 것: 1=올라감, -1=내려감, 0=비슷함. 실제 점수와 안 맞으면 GENERIC_TEMPLATE
@@ -120,13 +134,16 @@ def check_reasons(
     texts = []
     for reason in sorted(reasons, key=lambda r: r.get("recommend_order") if isinstance(r.get("recommend_order"), int) else 0):
         text = reason.get("text")
-        text = text.strip() if isinstance(text, str) else ""
+        # 띄어쓰기 여러 칸은 한 칸으로: 아래 낱말 검사가 공백 수에 따라 달라지지 않게 (줄바꿈은 형식 검사가 막음)
+        text = re.sub(" +", " ", text.strip()) if isinstance(text, str) else ""
         texts.append(text)
         if not (LINE_PATTERN.match(text) and END_PATTERN.search(text) and MIN_LEN <= len(text) <= MAX_LEN):
             add("format")
         for word in FORBIDDEN:
             if word in text:
                 add(f"forbidden:{word}")
+        if any(pattern.search(text) for pattern in EFFECT_PATTERNS):
+            add("effect")
         for other, words in EMOTION_WORDS.items():
             if other != emotion:
                 for word in words:
@@ -143,9 +160,11 @@ def check_reasons(
     if songs and len(songs) == 3 and len(texts) == 3:
         ordered = sorted(songs, key=lambda song: song["recommend_order"])
         for i in (1, 2):
+            text = re.sub("덜 *", "덜 ", texts[i])  # "덜밝게"도 "덜 밝게"로 읽음
             for (key, label, sign), words in DIRECTION_WORDS.items():
                 change = ordered[i][key] - ordered[i - 1][key]
-                if any(word in texts[i] for word in words) and change * sign <= 0:
+                # "덜 밝게"의 "밝게"는 올랐다는 말이 아님
+                if any(re.search(f"(?<!덜 ){word}", text) for word in words) and change * sign <= 0:
                     add(f"direction:{label}")
 
     return ([], problems) if problems else (texts, [])
