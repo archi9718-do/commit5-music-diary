@@ -75,6 +75,7 @@ h1:focus{outline:none}
 .mood>span{color:#31293b;font-size:13px}
 .mood-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
 .mood-grid.stack{grid-template-columns:1fr}
+.notice+.mood-grid{margin-top:15px}
 .mood-choice{height:47px;display:flex;gap:8px;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:13px;background:#fff9fdcc}
 .mood-choice.is-selected{border-color:#70479c;background:#f5e9ff}
 .mood-row{display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:15px;font-size:12px;color:var(--muted)}
