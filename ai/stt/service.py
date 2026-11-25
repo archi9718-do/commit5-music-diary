@@ -4,6 +4,7 @@
 # 녹음은 메모리(bytes)로만 받고 디스크에 쓰지 않습니다 → 처리 뒤 원본이 남지 않습니다.
 import io
 import os
+import re
 from itertools import chain
 
 import av
@@ -23,9 +24,16 @@ GEN_KW = {"language": "korean", "task": "transcribe"}
 # 소리 크기만으로는 못 가름: 데이터셋에 크기 0.0006인 녹음도 CER 0%로 받아써짐.
 # 대신 "큰 조각 ÷ 조용한 조각" 비율을 봄. 말은 쉼이 있어 크고, 고른 잡음은 1에 가까움.
 # 11/19 측정: 말소리 200개 최소 3.3 / 하위 5% 17.1, 고른 잡음 1.1
-MIN_SPEECH_RATIO = 2.0
-HALLUCINATION_PARTS = ("자막", "시청해 주셔서", "시청해주셔서")  # 들어 있으면 지어낸 글
-HALLUCINATION_ONLY = ("감사합니다",)  # 이 말만 단독으로 나오면 지어낸 글
+# 11/24 실제 크롬 녹음: 무음 2.8, TV 소리 5.9, 작게 말하기 11.5. 키보드 18.5, 선풍기 34.3은 비율로 못 가름
+# → 3.0: 무음만 막고 정상 발화(11/19 최솟값 3.3)는 막지 않음. 넘어온 잡음은 아래 문장·인사말 검사가 맡음 (건호 리뷰)
+# ponytail: 2.8과 3.0 사이 여유가 작음. 실제 녹음을 더 모아 다시 맞추기
+MIN_SPEECH_RATIO = 3.0
+# 지어낸 글은 실제로 관찰된 "문장 전체"만 막음 (띄어쓰기·문장부호는 무시). 문구가 들어 있기만 한 정상 일기는 통과
+# (11/24 건호 리뷰: "친구가 좋아요 부탁한다고 해서 웃었어요"가 막히던 문제)
+HALLUCINATION_SENTENCES = ("구독과좋아요부탁드립니다", "시청해주셔서감사합니다")
+HALLUCINATION_PREFIXES = ("한글자막",)  # 무음에서 "한글자막 제공 및 ..."처럼 뒤가 바뀌며 나옴
+# 인사말 한 마디: 잡음에서 지어낸 것인지 실제로 말한 것인지 글로는 구분할 수 없음 → 막지 않고, 저장 전에 사용자에게 확인
+GREETING_ONLY = ("감사합니다", "수고하셨습니다", "고마워요")
 
 _asr = None
 
@@ -85,15 +93,28 @@ def transcribe(audio_bytes: bytes) -> str:
     if not has_speech(audio):
         return ""  # 말소리 없음: 모델을 돌리지 않음
     text = load_model()({"raw": audio, "sampling_rate": TARGET_SR}, generate_kwargs=GEN_KW)["text"].strip()
-    # ponytail: 아는 문구만 막음. 실제 녹음에서 새 문구가 나오면 목록에 추가, 그래도 모자라면 음성 구간 검출(VAD)
-    if any(h in text for h in HALLUCINATION_PARTS) or text.strip(" .!") in HALLUCINATION_ONLY:
-        return ""
-    return text
+    return "" if is_hallucination(text) else text
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"[\s.,!?~]", "", text)
+
+
+def is_hallucination(text: str) -> bool:
+    """무음·잡음에서 Whisper가 지어낸 것으로 확인된 문장 전체면 True."""
+    # ponytail: 관찰된 문장만 막음(11/24 크롬 녹음). 새 문장이 또 나오면 음성 구간 검출(VAD)로 바꾸기
+    compact = _compact(text)
+    return compact in HALLUCINATION_SENTENCES or compact.startswith(HALLUCINATION_PREFIXES)
+
+
+def is_uncertain(text: str) -> bool:
+    """인사말 한 마디만 받아썼으면 True. 서버는 저장하지 않고 받아쓴 글을 먼저 보여 줘 사용자가 확인하게 합니다."""
+    return _compact(text) in GREETING_ONLY
 
 
 def has_speech(audio: np.ndarray) -> bool:
     """30ms 조각별 소리 크기에서 큰 쪽 5% ÷ 조용한 쪽 10% 비율로 말소리 여부를 봅니다."""
-    # ponytail: 고른 잡음만 가름. 실제 크롬 녹음(선풍기·거리 소리)으로 MIN_SPEECH_RATIO 다시 맞추기
+    # ponytail: 무음·고른 잡음만 가름. 키보드·선풍기·TV는 is_hallucination(막음)·is_uncertain(감정 직접 고르기)이 맡음
     n = 480  # 16kHz에서 30ms
     if len(audio) < n:
         return False

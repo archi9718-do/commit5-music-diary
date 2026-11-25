@@ -1,7 +1,7 @@
 import React, {useEffect, useRef, useState} from "react";
 import AudioLibrary from "./AudioLibrary.jsx";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
-import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons, reasonsAction} from "./api.js";
+import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons, reasonsAction, uncertainTranscript} from "./api.js";
 import {readParticipant, startNextParticipant} from "./participant.js";
 import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
@@ -15,6 +15,7 @@ const PAGES={
   recommend:["오늘의 추천 음악","음악 감상"], player:["음악 감상","음악 감상"], react:["곡에 반응 남기기","음악 감상"], complete:["감상 완료","음악 감상"],
   engrave:["LP 새김 확인","LP 기록"], engraved:["LP 새김 완료","LP 기록"], today:["오늘의 LP판","LP 기록"], history:["날짜별 기록","LP 기록"],
   me:["마이페이지","나의 기록"], "monthly-mood":["월간 감정 분석","나의 기록"], "monthly-music":["월간 음악 취향","나의 기록"], daytype:["Day Type","나의 기록"],
+  heard:["이렇게 들었어요","감정 확인"],
   failure:["감정을 분석하지 못했어요","예외 및 안내"], risk:["도움을 받을 수 있어요","예외 및 안내"], error:["문제가 발생했어요","예외 및 안내"],
 };
 const TABS=[["record","기록","note"],["history","내역","history"],["today","나의 LP","disc"],["me","마이","user"]];
@@ -325,7 +326,16 @@ export default function App(){
     setPick(null);
     go("loading");
     return run(async()=>{
-      const data=await request("/records/voice","POST",blob);
+      let data;
+      try{data=await request("/records/voice","POST",blob);}
+      catch(error){
+        // 인사말 한 마디(잡음에서 지어낸 글일 수 있음): 서버는 저장하지 않았음 → 받아쓴 글을 보여 주고 사용자가 고르게 함
+        const heard=uncertainTranscript(error);
+        if(heard===null)throw error;
+        setDraft({...fresh(),input:heard,mode:"voice"});
+        go("heard",false);
+        return;
+      }
       // ponytail: 위험 문장 검사가 서버 저장 뒤에 일어남. 글 경로처럼 앞에서 막으려면 받아쓰기 전용 API 필요
       if(classify(data.text).kind==="risk"){go("risk",false);return;}
       const output=analysisResult(data);
@@ -455,6 +465,7 @@ export default function App(){
       if(saved){setRecoveryError("");setRecovery(saved);return;}
     }
     if(["recommend","player","react","complete","engrave"].includes(page)&&!draft.mood)go("record",false);
+    if(page==="heard"&&!draft.input)go("record",false); // 새로고침 등으로 받아쓴 글이 사라지면 기록 화면으로
     if(page==="voice"&&!agreed)go("consent",false);
     if(page==="complete"&&draft.mood&&!draft.askMood)go("react",false);
     if(page!=="complete"&&draft.askMood)patch({askMood:false});
@@ -513,6 +524,7 @@ export default function App(){
       }
       case "monthly-music":{const list=monthlyMusic(thisMonth);return <><Heading title="월간 음악 취향" desc="내가 좋아요하거나 끝까지 들은 시연 곡의 기록이에요."/><MonthSelect month={month} onChange={setMonth}/>{list.length?<div className="cards">{list.map(t=><div className="track-card" key={t.id}><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>완청 {t.completed} · 좋아요 {t.liked} · 새김 {t.engraved}</small></div></div>)}</div>:<div className="empty">이 달에는 감상 기록이 없어요.</div>}</>;}
       case "daytype":{const summary=dayType(todaysRecord?.mood);return <><Heading title="Day Type" desc="오늘 남긴 기록으로 하루를 돌아봐요."/><LP/>{summary?<div className="surface center"><h2>{summary.title}</h2><Mood id={todaysRecord.mood}/><p>{summary.copy}</p><small>직접 확정한 감정에 맞춘 시연용 문구예요.</small></div>:<div className="empty">오늘의 LP판을 저장하면 이곳에서 볼 수 있어요.</div>}<div className="actions"><Btn variant="secondary" onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;}
+      case "heard":return <><Heading title="이렇게 들었어요" desc="소리가 짧거나 주변 소리일 수 있어서 아직 저장하지 않았어요."/><div className="surface center"><h2>“{draft.input}”</h2></div><div className="actions"><Btn onClick={manual}>이대로 기록하기</Btn><Btn variant="secondary" onClick={()=>go("voice")}>다시 녹음하기</Btn><button className="link" onClick={()=>go("record")}>글로 기록하기</button></div><Notice>이대로 기록하면 감정을 직접 골라 주세요. 다시 녹음하거나 나가면 오늘 기록은 그대로예요.</Notice></>;
       case "failure":return <><Heading title={PAGES.failure[0]} desc={message||"지금 마음은 직접 고를 수 있어요."}/><div className="actions"><Btn onClick={manual}>감정 직접 선택</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 다시 기록하기</Btn></div></>;
       case "risk":return <><Heading title="도움을 받을 수 있어요" desc="지금 힘들다면 혼자 감당하지 않아도 돼요."/><div className="surface"><h2>한국 자살예방상담전화</h2><p>109에서 24시간 상담을 받을 수 있어요. 지금 바로 안전을 지키기 어렵다면 119에 연락하세요.</p><div className="actions"><a className="btn primary" href="tel:109">109에 전화하기</a><a className="btn secondary" href="https://www.129.go.kr/109" target="_blank" rel="noreferrer">공식 상담 안내 보기</a></div></div><Notice>이 화면은 일부 문구를 확인하는 안내 시연이에요. 앱이 위기 여부를 진단하거나 상담을 연결해주지는 않아요.</Notice><div className="actions"><Btn variant="secondary" onClick={startNew}>기록 화면으로</Btn></div></>;
       case "error":return <><Heading title="문제가 발생했어요" desc={message||"현재 화면을 다시 열어주세요."}/><div className="actions"><Btn onClick={()=>{const p=navStack.at(-1);if(p&&p!=="error")back();else go("record");}}>다시 시도</Btn><Btn variant="secondary" onClick={()=>go("start")}>처음으로</Btn></div></>;
