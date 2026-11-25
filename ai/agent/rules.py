@@ -23,6 +23,12 @@ FORBIDDEN = (
     "힘내", "해야", "하세요",  # 명령·훈계
     "친구", "가족", "회사", "학교", "시험",  # 다른 사람·일기 내용 추측
 )
+# 곡이 기분·몸을 바꿔 준다는 말. 도구 결과에 없는 내용이라 11/25 판정에서 지어낸 말로 봄 (26/143)
+# ponytail: 판정에서 나온 표현 위주의 목록. 재평가에서 새 표현이 나오면 더하기
+EFFECT_WORDS = (
+    "감싸", "누그러", "숨을 고", "들어 올", "띄워", "데려가", "이끌", "머금게", "풀어 줘", "마음이 ",
+    "기분을 끌어올", "기분을 환하게", "날 선", "날선", "날카로", "달래", "다독",
+)
 # 확정 감정이 아닌 감정의 단어가 나오면 탈락 (도구 결과와 다른 감정을 지어냄)
 EMOTION_WORDS = {
     "좋음": ("신나", "기쁜", "기뻐", "행복", "들뜬", "설레"),
@@ -55,7 +61,7 @@ TEMPLATES = {
     ("가라앉음", "조금 밝게"): "밝기를 조금 올려 천천히 이어가요.",
     ("가라앉음", "더 밝게"): "한결 밝은 곡으로 오늘을 마무리해요.",
     ("예민함", "맞추기"): "지금의 높은 긴장과 닮은 곡으로 시작해요.",
-    ("예민함", "에너지 낮추기"): "에너지를 낮춘 곡으로 숨을 고르게 해요.",
+    ("예민함", "에너지 낮추기"): "에너지를 낮춘 곡으로 천천히 이어가요.",
     ("예민함", "차분하고 조금 밝게"): "차분하고 조금 밝은 곡으로 마무리해요.",
 }
 # 2·3번째 템플릿이 앞 곡과 비교해 주장하는 것: 1=올라감, -1=내려감, 0=비슷함. 실제 점수와 안 맞으면 GENERIC_TEMPLATE
@@ -127,6 +133,9 @@ def check_reasons(
         for word in FORBIDDEN:
             if word in text:
                 add(f"forbidden:{word}")
+        for word in EFFECT_WORDS:
+            if word in text:
+                add(f"effect:{word}")
         for other, words in EMOTION_WORDS.items():
             if other != emotion:
                 for word in words:
@@ -145,7 +154,8 @@ def check_reasons(
         for i in (1, 2):
             for (key, label, sign), words in DIRECTION_WORDS.items():
                 change = ordered[i][key] - ordered[i - 1][key]
-                if any(word in texts[i] for word in words) and change * sign <= 0:
+                # "덜 밝게"의 "밝게"는 올랐다는 말이 아님
+                if any(re.search(f"(?<!덜 ){word}", texts[i]) for word in words) and change * sign <= 0:
                     add(f"direction:{label}")
 
     return ([], problems) if problems else (texts, [])
