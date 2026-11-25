@@ -93,6 +93,10 @@ def warm_up() -> None:
         logger.warning("추천 이유 에이전트 미리 연결 실패: %s", type(exc).__name__)
 
 
+# get_songs로 Claude에 보내는 항목. 바꾸면 화면(App.jsx claudeNotice)과 API_CONTRACT 3.8절 안내도 함께 바꿉니다.
+SONG_FIELDS = ("recommend_order", "step", "brightness", "energy")
+
+
 def _tool_results(blocks, facts: dict, called: list[str]) -> list[dict]:
     sources = {"get_today": "today", "get_songs": "songs", "get_recent_moods": "recent_moods"}
     results = []
@@ -103,8 +107,11 @@ def _tool_results(blocks, facts: dict, called: list[str]) -> list[dict]:
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": "알 수 없는 도구입니다.",
                             "is_error": True})
         else:
+            data = facts[key]
+            if key == "songs":
+                data = [{field: song[field] for field in SONG_FIELDS} for song in data]
             results.append({"type": "tool_result", "tool_use_id": block.id,
-                            "content": json.dumps(facts[key], ensure_ascii=False)})
+                            "content": json.dumps(data, ensure_ascii=False)})
     return results
 
 

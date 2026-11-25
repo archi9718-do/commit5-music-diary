@@ -68,7 +68,10 @@ def test_tool_loop_then_valid_json_returns_texts():
     tool_result = client.calls[1]["messages"][-1]["content"][0]
     assert tool_result["type"] == "tool_result" and tool_result["tool_use_id"] == "tu_get_today"
     assert json.loads(tool_result["content"]) == FACTS["today"]
-    assert json.loads(client.calls[2]["messages"][-1]["content"][0]["content"]) == FACTS["songs"]
+    # song_id는 Claude에 보내지 않음 (건호 리뷰 #27: 안내에 적은 항목만 보냄)
+    sent = client.calls[2]["messages"][-1]["content"][0]["content"]
+    assert "song_id" not in sent and "deam_" not in sent
+    assert json.loads(sent) == [{k: v for k, v in song.items() if k != "song_id"} for song in FACTS["songs"]]
 
 
 def test_request_never_contains_diary_text():
