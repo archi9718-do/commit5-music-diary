@@ -106,6 +106,7 @@ def test_other_participant_cannot_see_or_change_record(client, other):
     assert client.patch(f"{path}/songs/1", json={"is_liked": True}, headers=headers).status_code == 404
     assert client.post(f"{path}/engrave", json={"recommend_orders": []}, headers=headers).status_code == 404
     assert client.get(f"{path}/post-listening", headers=headers).status_code == 404
+    assert client.post(f"{path}/reasons", headers=headers).status_code == 404
     emotion = {"record_id": record_id, "text": "남의 기록", "emotion": "좋음", "confidence": "높음",
                "probs": {"좋음": 0.7, "무난함": 0.1, "가라앉음": 0.1, "예민함": 0.1}}
     assert client.post("/api/emotions", json=emotion, headers=headers).status_code == 404
@@ -129,6 +130,7 @@ def test_owner_check_uses_same_record_id_as_route(client, form):
     path = f"/api/records/{form.format(id=record_id)}"
     assert client.get(f"{path}/lp", headers=as_("BBBB")).status_code == 404
     assert client.get(f"{path}/post-listening", headers=as_("BBBB")).status_code == 404
+    assert client.post(f"{path}/reasons", headers=as_("BBBB")).status_code == 404
     assert client.get(f"{path}/lp", headers=as_("AAAA")).status_code == 200
 
 
@@ -136,6 +138,7 @@ def test_owner_check_uses_same_record_id_as_route(client, form):
 def test_invalid_record_id_is_422_not_500(client, bad):
     assert client.get(f"/api/records/{bad}/lp", headers=as_("AAAA")).status_code == 422
     assert client.get(f"/api/records/{bad}/post-listening", headers=as_("AAAA")).status_code == 422
+    assert client.post(f"/api/records/{bad}/reasons", headers=as_("AAAA")).status_code == 422
 
 
 def test_one_participants_history_does_not_change_anothers_recommendation(client):

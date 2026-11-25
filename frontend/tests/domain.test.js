@@ -77,3 +77,9 @@ test("Day Type은 확정 감정만 요약하고 기록이 없는 경우를 구�
   assert.match(dayType("steady").title,/잔잔/);
   assert.equal(dayType(null),null);
 });
+
+test("위험 문장 묶음은 서버(ai/agent/rules.py)와 같은 판단을 한다",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const cases=JSON.parse(readFileSync(new URL("../../backend/tests/fixtures/risk_sentences.json",import.meta.url),"utf8"));
+  for(const c of cases)assert.equal(classify(c.text).kind==="risk",c.risk,c.text);
+});

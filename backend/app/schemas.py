@@ -97,3 +97,16 @@ class SongFeedback(BaseModel):
     is_skipped: bool
     is_completed: bool
     is_engraved: bool
+
+
+class ReasonLine(BaseModel):
+    recommend_order: int = Field(ge=1, le=3)
+    song_id: str
+    text: str
+
+
+class ReasonsResponse(BaseModel):
+    """추천 이유 3줄. source가 template이면 검사를 거친 템플릿 문장입니다."""
+    source: Literal["agent", "template"]
+    risk: bool
+    reasons: list[ReasonLine] = Field(min_length=3, max_length=3)

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from . import reasons
 from .audio import router as audio_router
 from .db import (
     connect,
@@ -21,6 +22,7 @@ from .db import (
 )
 from .owner import Participant, owned_record, require_owner
 from .post_listening import router as post_listening_router
+from .reasons import router as reasons_router
 from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
     MAX_RECORD_TEXT_LENGTH,
@@ -98,6 +100,7 @@ async def lifespan(app: FastAPI):
     init_db()
     prepare_emotion_model()  # 감정 모델은 서버가 켜질 때 한 번만 불러옵니다.
     prepare_stt_model()  # 받아쓰기 모델도 미리 불러와 첫 녹음이 느리지 않게 합니다.
+    reasons.agent_warm_up()  # 추천 이유 에이전트도 연결을 미리 맺어 첫 요청이 10초를 넘지 않게 합니다.
     yield
 
 
@@ -108,6 +111,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(post_listening_router)
+app.include_router(reasons_router)
 app.include_router(audio_router)
 
 # 로컬 React(Vite/CRA 등) 개발 서버만 허용한 설정입니다.
