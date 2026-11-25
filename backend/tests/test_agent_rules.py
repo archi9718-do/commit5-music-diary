@@ -107,7 +107,7 @@ def test_checker_rejects(reasons, code):
 
 
 def test_recent_word_ok_when_history_exists():
-    reasons = lines("요즘 무거웠던 마음을 천천히 풀어요.", *GOOD[1:])
+    reasons = lines("요즘 이어진 가라앉은 마음에 맞춘 곡이에요.", *GOOD[1:])
     assert check_reasons(reasons, "가라앉음", has_recent=True)[1] == []
 
 
@@ -179,6 +179,27 @@ def test_less_than_phrases_are_read_as_decrease(second):
     assert any(p.startswith("direction:") for p in check_reasons(reasons, "가라앉음", False, songs=UP)[1])
 
 
+# 건호 리뷰(#34): 공백 두 칸이면 "덜 밝게"를 거꾸로 읽음. 밝기가 내려갈 때 통과, 오를 때 탈락해야 함
+@pytest.mark.parametrize("gap", ["", " ", "  ", "   "])
+@pytest.mark.parametrize(("brightness", "passes"), [(0.4, True), (0.6, False)])
+def test_spacing_does_not_flip_brightness_direction(gap, brightness, passes):
+    songs = [{"recommend_order": i, "brightness": b, "energy": 0.5} for i, b in enumerate([0.5, brightness, 0.5], 1)]
+    reasons = lines(FIRST, f"앞 곡보다 살짝 덜{gap}밝게 흐르는 곡이에요.", "잔잔한 흐름으로 오늘을 마무리해요.")
+    assert ("direction:밝기" not in check_reasons(reasons, "가라앉음", False, songs=songs)[1]) is passes
+
+
+@pytest.mark.parametrize(("brightness", "passes"), [(0.4, False), (0.6, True)])
+def test_spacing_does_not_hide_brighter_claim(brightness, passes):
+    songs = [{"recommend_order": i, "brightness": b, "energy": 0.5} for i, b in enumerate([0.5, brightness, 0.5], 1)]
+    reasons = lines(FIRST, "앞 곡보다 살짝 더  밝은 느낌의 곡이에요.", "잔잔한 흐름으로 오늘을 마무리해요.")
+    assert ("direction:밝기" not in check_reasons(reasons, "가라앉음", False, songs=songs)[1]) is passes
+
+
+def test_repeated_spaces_are_shown_as_one():
+    texts, problems = check_reasons(lines(GOOD[0].replace(" ", "  "), *GOOD[1:]), "가라앉음", False)
+    assert problems == [] and texts == GOOD
+
+
 # 11/25 판정에서 지어낸 말로 본 문장: 곡이 기분·몸을 바꿔 준다고 말함 (도구 결과에 없는 내용)
 @pytest.mark.parametrize("text", [
     "가장 밝으면서도 조금 차분하게 좋은 기분을 감싸 줘요",
@@ -195,10 +216,19 @@ def test_less_than_phrases_are_read_as_decrease(second):
     "조금 더 밝은 곡으로 날선 마음을 누그러뜨려요",
     "조금 더 밝은 곡으로 마음을 부드럽게 풀어 줘요",
     "앞 곡보다 한결 밝은 곡으로 숨을 고를 수 있어요",
+    "이 곡을 들으면 기분이 조금 좋아져요.",  # 건호 리뷰(#34)
+    "잔잔한 흐름을 듣다 보면 한결 편안해져요",
+    "한결 밝은 곡으로 기분 전환을 도와주는 곡이에요",
+    "한결 밝은 곡이 가라앉은 마음을 가볍게 해 줘요",
+    "잔잔한 곡이 마음에 위로가 되어 주는 곡이에요",
+    "지친 마음을 어루만지는 잔잔한 곡이에요",
+    "가라앉은 기분을 한층 밝게 해 주는 곡이에요",
+    "가라앉은 마음을 안아 주는 잔잔한 곡이에요",
+    "숨을  고를 수 있게 조금 더 밝은 곡이에요",
 ])
 def test_effect_claims_are_rejected(text):
     _, problems = check_reasons(lines(GOOD[0], text, GOOD[2]), "가라앉음", False)
-    assert any(p.startswith("effect:") for p in problems), text
+    assert "effect" in problems, text
 
 
 @pytest.mark.parametrize("text", [
@@ -208,7 +238,11 @@ def test_effect_claims_are_rejected(text):
     "좋은 기분을 편안하게 이어 주는 곡이에요",
     "어둡고 힘찬 곡으로 먼저 마음을 맞춰요",
     "비슷한 분위기를 유지하며 기운을 조금씩 내려놓아요",
+    "가라앉은 마음이 담긴 듯한 잔잔한 곡이에요.",  # 건호 리뷰(#34)
+    "가라앉은 마음이 느껴지는 듯한 차분한 곡이에요",
+    "가라앉은 마음을 닮은 조금 더 밝아진 곡이에요",
+    "날 선 느낌과 닮은 어둡고 힘찬 곡이에요",
 ])
 def test_describing_the_song_is_not_an_effect_claim(text):
     _, problems = check_reasons(lines(GOOD[0], text, GOOD[2]), "가라앉음", False)
-    assert not any(p.startswith("effect:") for p in problems), text
+    assert "effect" not in problems, text
