@@ -5,14 +5,21 @@ from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from traceback import extract_tb
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .audio import router as audio_router
-from .db import connect, ensure_song, get_demo_user_id, init_db, save_today_record
+from .db import (
+    connect,
+    ensure_song,
+    get_user_id,
+    init_db,
+    save_today_record,
+)
+from .owner import Participant, owned_record, require_owner
 from .post_listening import router as post_listening_router
 from .recommender import ScoreDataError, load_recommendation_candidates, recommend_three
 from .schemas import (
@@ -109,7 +116,7 @@ app.add_middleware(
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Participant"],
 )
 
 
@@ -119,7 +126,7 @@ def health():
 
 
 @app.post("/api/records", status_code=201, tags=["기록"])
-def create_record(payload: RecordCreate):
+def create_record(payload: RecordCreate, x_participant: Participant = None):
     """먼저 기록 ID를 발급합니다. 이후 상현의 분석 JSON에 이 ID를 포함합니다.
 
     하루 1건 규칙: 같은 날 다시 부르면 새 ID 대신 오늘 기록을 덮어쓰고 같은 ID를 돌려줍니다.
@@ -127,14 +134,14 @@ def create_record(payload: RecordCreate):
     con = connect()
     try:
         with con:
-            record_id = save_today_record(con, get_demo_user_id(con), payload.text)
+            record_id = save_today_record(con, get_user_id(con, x_participant), payload.text)
     finally:
         con.close()
     return {"record_id": record_id, "text": payload.text}
 
 
 @app.post("/api/records/analyze", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
-def analyze_record(payload: RecordCreate):
+def analyze_record(payload: RecordCreate, x_participant: Participant = None):
     """글을 받아 감정을 분석하고, 성공했을 때만 기록과 감정 결과를 한 번에 저장합니다.
 
     - 분석에 실패하면 아무것도 저장하지 않습니다(반쪽짜리 기록 없음).
@@ -145,7 +152,7 @@ def analyze_record(payload: RecordCreate):
     #    (2,000자 초과는 RecordCreate가 이미 422로 막습니다.)
     if not payload.text.strip():
         raise HTTPException(status_code=422, detail="감정을 분석할 글이 비어 있습니다.")
-    return _analyze_and_save(payload.text)
+    return _analyze_and_save(payload.text, x_participant)
 
 
 def _check_emotion_ready() -> None:
@@ -163,7 +170,7 @@ def _log_model_failure(label: str, exc: Exception) -> None:
     logger.warning("%s 실패: %s [%s]", label, type(exc).__name__, locations)
 
 
-def _analyze_and_save(text: str) -> EmotionResult:
+def _analyze_and_save(text: str, participant: str | None = None) -> EmotionResult:
     """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
     _check_emotion_ready()
 
@@ -187,7 +194,7 @@ def _analyze_and_save(text: str) -> EmotionResult:
     try:
         with con:
             record_id = save_today_record(
-                con, get_demo_user_id(con), checked.text,
+                con, get_user_id(con, participant), checked.text,
                 emotion_pred=checked.emotion,
                 confidence_level=checked.confidence,
                 emotion_probs=checked.probs,
@@ -202,7 +209,7 @@ MAX_AUDIO_BYTES = 3 * 1024 * 1024  # 10초 wav(48kHz 스테레오) 약 1.9MB + �
 
 
 @app.post("/api/records/voice", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
-async def analyze_voice(request: Request):
+async def analyze_voice(request: Request, x_participant: Participant = None):
     """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기 → 글 감정 분석 → 저장까지 합니다.
 
     - 응답·저장·같은 날 덮어쓰기 규칙은 POST /api/records/analyze와 같습니다.
@@ -227,10 +234,10 @@ async def analyze_voice(request: Request):
         raise HTTPException(status_code=400, detail="녹음 파일이 비어 있습니다.")
 
     # 모델 계산은 오래 걸리므로 별도 스레드에서 (서버의 다른 요청이 멈추지 않게)
-    return await run_in_threadpool(_voice_to_result, bytes(audio))
+    return await run_in_threadpool(_voice_to_result, bytes(audio), x_participant)
 
 
-def _voice_to_result(audio: bytes) -> EmotionResult:
+def _voice_to_result(audio: bytes, participant: str | None = None) -> EmotionResult:
     if not STT_STATUS["ready"] or stt_service is None:
         raise HTTPException(
             status_code=503,
@@ -258,15 +265,16 @@ def _voice_to_result(audio: bytes) -> EmotionResult:
             "code": "uncertain_transcript", "text": text,
             "message": "이렇게 들었어요. 맞으면 이대로 기록하고, 아니면 다시 녹음해 주세요.",
         })
-    return _analyze_and_save(text)
+    return _analyze_and_save(text, participant)
 
 
 @app.post("/api/emotions", tags=["감정 인식 연동"])
-def save_emotion_result(payload: EmotionResult):
+def save_emotion_result(payload: EmotionResult, x_participant: Participant = None):
     """상현의 JSON을 받아 저장하되, 예측 감정을 확정 감정으로 취급하지 않습니다."""
     con = connect()
     try:
         with con:
+            require_owner(con, payload.record_id, x_participant)
             cursor = con.execute(
                 """UPDATE tb_record
                    SET record_text = ?, emotion_pred = ?, confidence_level = ?, emotion_probs = ?
@@ -282,12 +290,13 @@ def save_emotion_result(payload: EmotionResult):
 
 
 @app.post("/api/recommendations", response_model=RecommendationResponse, tags=["3곡 추천"])
-def create_recommendations(payload: RecommendationRequest):
+def create_recommendations(payload: RecommendationRequest, x_participant: Participant = None):
     """확정 감정으로 3곡을 추천하고 결과를 DB에 저장합니다."""
     try:
         candidates = load_recommendation_candidates()
         with closing(connect()) as con, con:
             con.execute("BEGIN IMMEDIATE")
+            require_owner(con, payload.record_id, x_participant)
             recent_songs = con.execute(
                 """SELECT DISTINCT rs.song_id
                    FROM tb_record AS target
@@ -325,7 +334,7 @@ def create_recommendations(payload: RecommendationRequest):
     return {"songs": songs}
 
 
-@app.get("/api/records/{record_id}/lp", tags=["오늘의 판"])
+@app.get("/api/records/{record_id}/lp", tags=["오늘의 판"], dependencies=[Depends(owned_record)])
 def get_today_lp(record_id: int):
     """오늘의 판: 기록과 추천곡 3개, 곡별 반응을 함께 돌려줍니다.
 
@@ -373,6 +382,7 @@ def _feedback_row(con, record_id: int, recommend_order: int):
 @app.patch(
     "/api/records/{record_id}/songs/{recommend_order}",
     response_model=SongFeedback,
+    dependencies=[Depends(owned_record)],
     tags=["추천곡 반응"],
 )
 def update_song_feedback(
@@ -417,6 +427,7 @@ def update_song_feedback(
 @app.post(
     "/api/records/{record_id}/engrave",
     response_model=list[SongFeedback],
+    dependencies=[Depends(owned_record)],
     tags=["추천곡 반응"],
 )
 def engrave_liked_songs(payload: EngraveRequest | None = None, record_id: int = PathParam(gt=0)):
