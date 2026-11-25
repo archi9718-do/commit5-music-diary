@@ -4,6 +4,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from ai.agent.rules import GENERIC_TEMPLATE
 from fastapi.testclient import TestClient
 
 from app import db, main, reasons
@@ -108,6 +109,24 @@ def test_before_recommendation_is_409(client, agent):
 
 def test_missing_record_is_404(client, agent):
     assert client.post("/api/records/9999/reasons").status_code == 404
+
+
+def test_owner_gets_reasons_but_others_get_404_without_calling_agent(client, agent):
+    owner, other = {"X-Participant": "AAAA"}, {"X-Participant": "BBBB"}
+    record_id = client.post("/api/records", json={"text": "오늘"}, headers=owner).json()["record_id"]
+    client.post("/api/recommendations", json={"record_id": record_id, "confirmed_emotion": "가라앉음"}, headers=owner)
+    path = f"/api/records/{record_id}/reasons"
+    assert client.post(path, headers=other).status_code == 404 and agent.facts == []
+    assert client.post(path, headers=owner).status_code == 200 and len(agent.facts) == 1
+
+
+def test_template_checks_actual_scores(client, monkeypatch):
+    monkeypatch.setattr(reasons, "agent_ready", lambda: False)
+    record_id = recommend(client)
+    with closing(db.connect()) as con, con:
+        con.execute("UPDATE tb_record_song SET valence_at_rec = 0.1 WHERE record_id = ? AND recommend_order = 2", (record_id,))
+    texts = [r["text"] for r in client.post(f"/api/records/{record_id}/reasons").json()["reasons"]]
+    assert texts == [TEMPLATES[0], GENERIC_TEMPLATE, TEMPLATES[2]]
 
 
 def test_recent_moods_only_same_user_previous_7_days(client, agent):

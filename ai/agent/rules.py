@@ -58,6 +58,20 @@ TEMPLATES = {
     ("예민함", "에너지 낮추기"): "에너지를 낮춘 곡으로 숨을 고르게 해요.",
     ("예민함", "차분하고 조금 밝게"): "차분하고 조금 밝은 곡으로 마무리해요.",
 }
+# 2·3번째 템플릿이 앞 곡과 비교해 주장하는 것: 1=올라감, -1=내려감, 0=비슷함. 실제 점수와 안 맞으면 GENERIC_TEMPLATE
+# 템플릿 문구를 바꾸면 여기도 함께 바꿉니다.
+TEMPLATE_CLAIMS = {
+    ("좋음", "비슷한 분위기 2"): {"brightness": 0},
+    ("좋음", "비슷한 분위기 3"): {"brightness": 0, "energy": 0},
+    ("무난함", "비슷한 분위기 2"): {"brightness": 0, "energy": 0},
+    ("무난함", "비슷한 분위기 3"): {"brightness": 0, "energy": 0},
+    ("가라앉음", "조금 밝게"): {"brightness": 1},
+    ("가라앉음", "더 밝게"): {"brightness": 1},
+    ("예민함", "에너지 낮추기"): {"energy": -1},
+    ("예민함", "차분하고 조금 밝게"): {"brightness": 1, "energy": -1},
+}
+# ponytail: "비슷함" 기준 0.1은 임시값(목표끼리의 차이는 최대 0.05). 실제 DEAM 점수표로 다시 정하기
+SIMILAR_RANGE = 0.1
 GENERIC_TEMPLATE = "오늘 고른 기분에 맞춰 고른 곡이에요."
 
 
@@ -69,8 +83,19 @@ def is_risk(text: str | None) -> bool:
     return any(pattern.search(normalized) for pattern in RISK_PATTERNS)
 
 
-def template_reasons(emotion: str, steps: list[str]) -> list[str]:
-    return [TEMPLATES.get((emotion, step), GENERIC_TEMPLATE) for step in steps]
+def template_reasons(emotion: str, songs: list[dict]) -> list[str]:
+    """추천 순서대로 놓인 곡마다 한 줄. 앞 곡과 비교한 말이 실제 점수와 안 맞으면 비교 없는 문장."""
+    texts = []
+    for i, song in enumerate(songs):
+        key = (emotion, song["step"])
+        text = TEMPLATES.get(key, GENERIC_TEMPLATE)
+        if i > 0:
+            for score, sign in TEMPLATE_CLAIMS.get(key, {}).items():
+                change = song[score] - songs[i - 1][score]
+                if abs(change) > SIMILAR_RANGE if sign == 0 else change * sign <= 0:
+                    text = GENERIC_TEMPLATE
+        texts.append(text)
+    return texts
 
 
 def check_reasons(

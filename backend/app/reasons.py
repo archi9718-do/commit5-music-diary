@@ -10,10 +10,11 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import closing
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi import Path as PathParam
 
 from .db import connect
+from .owner import owned_record
 from .schemas import ReasonsResponse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # main.py와 같은 이유: 저장소 최상위의 ai/를 찾기 위함
@@ -37,7 +38,7 @@ except Exception:  # noqa: BLE001
     write_reasons = None
 
 logger = logging.getLogger("moodwave")
-router = APIRouter(prefix="/api/records", tags=["추천 이유"])
+router = APIRouter(prefix="/api/records", tags=["추천 이유"], dependencies=[Depends(owned_record)])
 
 # SDK timeout은 동작 하나(연결·읽기)마다 걸려서 여러 번 부르는 전체 시간을 못 막음. 여기서 전체를 끊음.
 # ponytail: 시간을 넘긴 호출은 뒤에서 끝까지 돌고(비용 발생) 결과만 버림. 자주 넘기면 반복 횟수를 줄이기
@@ -73,7 +74,7 @@ def create_reasons(record_id: int = PathParam(gt=0)):
 
     emotion = record["emotion_final"]
     songs = [dict(row) for row in songs]
-    texts = template_reasons(emotion, [song["step"] for song in songs])
+    texts = template_reasons(emotion, songs)
     source, risk = "template", is_risk(record["record_text"])
     if not risk and agent_ready():
         facts = {

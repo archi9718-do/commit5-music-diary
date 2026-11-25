@@ -10,7 +10,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ai.agent.rules import GENERIC_TEMPLATE, check_reasons, is_risk, template_reasons
+from ai.agent.rules import (
+    GENERIC_TEMPLATE,
+    TEMPLATE_CLAIMS,
+    TEMPLATES,
+    check_reasons,
+    is_risk,
+    template_reasons,
+)
+
+from app.recommender import TARGETS
 
 RISK_FIXTURE = Path(__file__).parent / "fixtures" / "risk_sentences.json"
 GOOD = ["지금 마음처럼 낮고 잔잔한 곡으로 시작해요.", "밝기를 조금 올려 천천히 이어가요.", "한결 밝은 곡으로 오늘을 마무리해요."]
@@ -18,6 +27,11 @@ GOOD = ["지금 마음처럼 낮고 잔잔한 곡으로 시작해요.", "밝기�
 
 def lines(*texts, orders=(1, 2, 3)):
     return [{"recommend_order": o, "text": t} for o, t in zip(orders, texts)]
+
+
+def target_songs(emotion):
+    return [{"recommend_order": i, "step": step, "brightness": b, "energy": e}
+            for i, (b, e, step) in enumerate(TARGETS[emotion], 1)]
 
 
 def test_risk_sentences_match_fixture():
@@ -29,21 +43,41 @@ def test_empty_text_is_not_risk():
     assert is_risk(None) is False and is_risk("") is False and is_risk("   ") is False
 
 
-@pytest.mark.parametrize(("emotion", "steps"), [
-    ("좋음", ["비슷한 분위기 1", "비슷한 분위기 2", "비슷한 분위기 3"]),
-    ("무난함", ["비슷한 분위기 1", "비슷한 분위기 2", "비슷한 분위기 3"]),
-    ("가라앉음", ["맞추기", "조금 밝게", "더 밝게"]),
-    ("예민함", ["맞추기", "에너지 낮추기", "차분하고 조금 밝게"]),
-])
-def test_templates_pass_checker(emotion, steps):
-    texts = template_reasons(emotion, steps)
-    assert len(texts) == 3
-    reasons = [{"recommend_order": i, "text": t} for i, t in enumerate(texts, 1)]
-    assert check_reasons(reasons, emotion, has_recent=False) == (texts, [])
+@pytest.mark.parametrize("emotion", TARGETS)
+def test_templates_on_target_scores_pass_checker(emotion):
+    songs = target_songs(emotion)
+    texts = template_reasons(emotion, songs)
+    assert texts == [TEMPLATES[emotion, song["step"]] for song in songs]
+    assert check_reasons(lines(*texts), emotion, has_recent=False, songs=songs) == (texts, [])
 
 
 def test_unknown_step_uses_generic_template():
-    assert template_reasons("좋음", ["없는 단계"]) == [GENERIC_TEMPLATE]
+    songs = [{**song, "step": "없는 단계"} for song in target_songs("좋음")]
+    assert template_reasons("좋음", songs) == [GENERIC_TEMPLATE] * 3
+
+
+# 건호 2차 리뷰(#27): 템플릿도 실제 점수와 안 맞으면 비교 없는 문장으로. index번째 곡만 바꿔 그 줄의 주장을 깸
+@pytest.mark.parametrize(("emotion", "index", "scores"), [
+    ("좋음", 1, {"brightness": 0.50}),  # "비슷한 밝기"인데 크게 어두움
+    ("좋음", 2, {"energy": 0.20}),  # "같은 분위기"인데 에너지가 크게 다름
+    ("무난함", 1, {"energy": 0.90}),
+    ("가라앉음", 1, {"brightness": 0.20}),  # "밝기를 올려"인데 그대로
+    ("가라앉음", 2, {"brightness": 0.30}),
+    ("예민함", 1, {"energy": 0.90}),
+    ("예민함", 2, {"energy": 0.60}),
+    ("예민함", 2, {"brightness": 0.10}),
+])
+def test_template_against_actual_scores_becomes_generic(emotion, index, scores):
+    songs = target_songs(emotion)
+    songs[index].update(scores)
+    texts = template_reasons(emotion, songs)
+    assert texts[index] == GENERIC_TEMPLATE
+    assert texts[0] == TEMPLATES[emotion, songs[0]["step"]]
+
+
+def test_template_claim_covers_every_comparing_step():
+    later = {(emotion, step) for emotion, stages in TARGETS.items() for _, _, step in stages[1:]}
+    assert set(TEMPLATE_CLAIMS) == later
 
 
 def test_generic_template_passes_checker_for_every_emotion():
@@ -116,18 +150,6 @@ def test_calmer_claim_needs_lower_energy():
 def test_first_line_and_unchanged_words_are_not_direction_claims():
     reasons = lines("지금처럼 밝고 힘찬 곡으로 시작해요.", "차분함은 그대로 두고 이어가요.", "잔잔한 흐름으로 오늘을 마무리해요.")
     assert check_reasons(reasons, "가라앉음", False, songs=DOWN)[1] == []
-
-
-@pytest.mark.parametrize(("emotion", "steps", "songs"), [
-    ("가라앉음", ["맞추기", "조금 밝게", "더 밝게"], UP),
-    ("예민함", ["맞추기", "에너지 낮추기", "차분하고 조금 밝게"],
-     [{"recommend_order": 1, "brightness": 0.25, "energy": 0.85}, {"recommend_order": 2, "brightness": 0.30, "energy": 0.50},
-      {"recommend_order": 3, "brightness": 0.55, "energy": 0.30}]),
-])
-def test_templates_pass_direction_check_on_ordered_flows(emotion, steps, songs):
-    texts = template_reasons(emotion, steps)
-    reasons = [{"recommend_order": i, "text": t} for i, t in enumerate(texts, 1)]
-    assert check_reasons(reasons, emotion, False, songs=songs) == (texts, [])
 
 
 @pytest.mark.parametrize(("second", "code", "songs"), [
