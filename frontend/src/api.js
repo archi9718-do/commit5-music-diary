@@ -22,8 +22,11 @@ export async function request(path, method = "GET", body) {
   });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    const error = new Error(typeof data?.detail === "string" ? data.detail : "서버 요청을 처리하지 못했어요.");
+    const detail = data?.detail;
+    const message = typeof detail === "string" ? detail : typeof detail?.message === "string" ? detail.message : "";
+    const error = new Error(message || "서버 요청을 처리하지 못했어요.");
     error.status = response.status;
+    error.detail = detail;
     throw error;
   }
   const data = await response.json().catch(error => {
@@ -33,6 +36,10 @@ export async function request(path, method = "GET", body) {
   if (!data || typeof data !== "object") throw new Error("서버 응답 형식이 올바르지 않아요.");
   return data;
 }
+
+// 녹음이 인사말 한 마디로만 받아써져 서버가 저장하지 않은 경우, 받아쓴 글 (아니면 null)
+export const uncertainTranscript = error =>
+  error?.status === 422 && error.detail?.code === "uncertain_transcript" ? error.detail.text : null;
 
 export const moodId = label => MOODS.find(mood => mood.label === label)?.id;
 

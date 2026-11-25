@@ -258,6 +258,13 @@ def _voice_to_result(audio: bytes, participant: str | None = None) -> EmotionRes
         raise HTTPException(status_code=422, detail="말소리를 알아듣지 못했어요. 다시 녹음하거나 글로 적어 주세요.")
     if len(text) > MAX_RECORD_TEXT_LENGTH:
         raise HTTPException(status_code=422, detail=f"받아쓴 글은 {MAX_RECORD_TEXT_LENGTH}자 이하여야 합니다.")
+    if stt_service.is_uncertain(text):
+        # 인사말 한 마디: 잡음에서 지어낸 글일 수 있음 → 저장하지 않고 받아쓴 글만 돌려줌 (오늘 일기·추천곡을 덮어쓰지 않음)
+        # 화면이 "이렇게 들었어요"를 보여 주고, 사용자가 고르면 POST /api/records + 감정 직접 선택으로 저장 (건호 리뷰 #28)
+        raise HTTPException(status_code=422, detail={
+            "code": "uncertain_transcript", "text": text,
+            "message": "이렇게 들었어요. 맞으면 이대로 기록하고, 아니면 다시 녹음해 주세요.",
+        })
     return _analyze_and_save(text, participant)
 
 
