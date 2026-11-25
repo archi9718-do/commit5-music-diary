@@ -1,9 +1,10 @@
 from contextlib import closing
 from sqlite3 import Connection, Row
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from .db import connect
+from .owner import owned_record
 from .schemas import (
     MoodAfterState,
     MoodAfterUpdate,
@@ -11,7 +12,8 @@ from .schemas import (
     PostListeningState,
 )
 
-router = APIRouter(prefix="/api/records", tags=["감상 후 기분"])
+# 이 라우터의 경로는 모두 {record_id}가 있어 라우터 전체에 주인 확인을 겁니다.
+router = APIRouter(prefix="/api/records", tags=["감상 후 기분"], dependencies=[Depends(owned_record)])
 
 
 def _read_record(con: Connection, record_id: int) -> Row:
