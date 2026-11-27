@@ -47,6 +47,8 @@ def init_db() -> None:
     try:
         with con:
             con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            # 여러 서버가 같은 기존 DB를 열어도 열 확인과 추가를 한 번에 실행합니다.
+            con.execute("BEGIN IMMEDIATE")
             add_taste_side_column(con)
             init_audio_catalog(con)
             con.execute(

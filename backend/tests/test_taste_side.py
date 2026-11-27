@@ -1,8 +1,10 @@
 """취향 유형 쪽(taste_side) 시험: 추천 요청에서 받고, 추천 계산에 쓰고, 기록에 남깁니다."""
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
@@ -80,14 +82,52 @@ def test_rerecord_same_day_clears_taste_side(client):
     assert stored_side(rid) is None
 
 
-def test_old_db_gets_column_on_startup(tmp_path, monkeypatch):
-    path = tmp_path / "old.db"
+def create_old_db(path):
     old_schema = "\n".join(line for line in db.SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
                            if not line.lstrip().startswith("taste_side"))  # 취향 유형 전 schema.sql
     with closing(sqlite3.connect(path)) as con:
         con.executescript(old_schema)
         assert "taste_side" not in {row[1] for row in con.execute("PRAGMA table_info(tb_record)")}
+
+
+def test_old_db_gets_column_on_startup(tmp_path, monkeypatch):
+    path = tmp_path / "old.db"
+    create_old_db(path)
     monkeypatch.setenv("MOODWAVE_DB_PATH", str(path))
     db.init_db()
     with closing(sqlite3.connect(path)) as con:
         assert "taste_side" in {row[1] for row in con.execute("PRAGMA table_info(tb_record)")}
+
+
+def test_concurrent_startups_add_taste_side_once(tmp_path, monkeypatch):
+    path = tmp_path / "shared.db"
+    create_old_db(path)
+    both_started = Barrier(2, timeout=5)
+    both_inspected = Barrier(2, timeout=5)
+
+    class CoordinatedConnection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            cursor = super().execute(sql, *args)
+            if sql == "PRAGMA table_info(tb_record)" and not self.in_transaction:
+                # 잠금 없이 조회하는 구현에서는 두 워커가 모두 이전 열 목록을 읽게 합니다.
+                rows = cursor.fetchall()
+                both_inspected.wait()
+                return rows
+            return cursor
+
+    def connect():
+        return sqlite3.connect(path, timeout=15, factory=CoordinatedConnection)
+
+    def startup():
+        both_started.wait()
+        db.init_db()
+
+    monkeypatch.setattr(db, "connect", connect)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        startups = [executor.submit(startup) for _ in range(2)]
+        for future in startups:
+            future.result()
+
+    with closing(sqlite3.connect(path)) as con:
+        columns = [row[1] for row in con.execute("PRAGMA table_info(tb_record)")]
+        assert columns.count("taste_side") == 1
