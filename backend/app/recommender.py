@@ -10,7 +10,7 @@ from collections.abc import Set
 from dataclasses import dataclass
 from pathlib import Path
 
-from .schemas import Emotion, Song
+from .schemas import SIDES, Emotion, Song, TasteSide
 
 
 class ScoreDataError(Exception):
@@ -49,6 +49,17 @@ TARGETS: dict[str, tuple[tuple[float, float, str], ...]] = {
         (0.55, 0.30, "차분하고 조금 밝게"),
     ),
 }
+
+# 취향 유형의 쪽별 목표. 기본 쪽은 위 감정별 표 그대로, 다른 쪽 4개는 설계 문서 8절 값입니다.
+SIDE_TARGETS: dict[str, tuple[tuple[float, float, str], ...]] = {
+    **{default: TARGETS[emotion] for emotion, (default, _) in SIDES.items()},
+    "머무름": ((0.20, 0.30, "맞추기"), (0.22, 0.25, "곁에 머물기"), (0.28, 0.22, "잔잔하게 마무리")),
+    "발산": ((0.25, 0.85, "맞추기"), (0.22, 0.88, "쏟아내기"), (0.30, 0.80, "끝까지 쏟아내기")),
+    "증폭": ((0.80, 0.70, "맞추기"), (0.83, 0.80, "더 신나게"), (0.85, 0.88, "끌어올리기")),
+    "전환": ((0.50, 0.40, "맞추기"), (0.65, 0.55, "조금 밝게"), (0.78, 0.65, "활기차게")),
+}
+# 밝기·에너지가 정해진 방향으로만 이어져야 하는 쪽 (_can_follow)
+ORDERED_SIDES = {"위로", "진정"}
 
 
 def load_song_scores(csv_path: Path) -> list[ScoredSong]:
@@ -122,14 +133,19 @@ def recommend_three(
     emotion: Emotion,
     recent_song_ids: Set[str] = frozenset(),
     *,
+    side: TasteSide | None = None,
     candidates: list[ScoredSong] | None = None,
 ) -> list[Song]:
-    """감정별 순서를 지키면서 이전 추천곡이 가장 적은 3곡을 고릅니다."""
+    """감정·쪽별 순서를 지키면서 이전 추천곡이 가장 적은 3곡을 고릅니다. side가 없으면 기본 쪽."""
+    if side is None:
+        side = SIDES[emotion][0]
+    elif side not in SIDES[emotion]:
+        raise ValueError(f"{emotion}의 쪽이 아닙니다: {side}")
     if candidates is None:
         candidates = load_recommendation_candidates()
 
     def rank(song: ScoredSong, stage: int) -> tuple[bool, float, str]:
-        target_v, target_a, _ = TARGETS[emotion][stage]
+        target_v, target_a, _ = SIDE_TARGETS[side][stage]
         return (
             song.song_id in recent_song_ids,
             (song.valence - target_v) ** 2 + (song.arousal - target_a) ** 2,
@@ -141,7 +157,7 @@ def recommend_three(
         eligible = (
             song for song in candidates
             if song not in selected
-            and (not selected or _can_follow(emotion, selected[-1], song, stage))
+            and (not selected or _can_follow(side, selected[-1], song, stage))
         )
         best = min(eligible, key=lambda song: rank(song, stage), default=None)
         if best is None:
@@ -150,7 +166,7 @@ def recommend_three(
 
     # 새 곡이 충분하면 0곡, 부족하면 부족분이 재추천 곡 수의 하한입니다.
     min_repeats = max(0, 3 - sum(song.song_id not in recent_song_ids for song in candidates))
-    if emotion in {"가라앉음", "예민함"} and (
+    if side in ORDERED_SIDES and (
         len(selected) < 3 or sum(song.song_id in recent_song_ids for song in selected) > min_repeats
     ):
         def path_rank(path: tuple[ScoredSong, ...], start: int):
@@ -159,31 +175,31 @@ def recommend_three(
                 tuple(rank(song, stage) for stage, song in enumerate(path, start)),
             )
 
-        # 가라앉음·예민함은 밝기 또는 에너지가 계속 변하므로 같은 곡이 다시 나올 수 없습니다.
+        # 위로·진정은 밝기 또는 에너지가 계속 변하므로 같은 곡이 다시 나올 수 없습니다.
         # 마지막부터 각 후보가 이어 갈 수 있는 최선의 조합을 찾아 모든 유효한 첫 곡을 비교합니다.
         tails: list[tuple[ScoredSong, ...]] = [(song,) for song in candidates]
         for stage in (1, 0):
             tails.sort(key=lambda tail: path_rank(tail, stage + 1))
             paths = []
             for song in candidates:
-                tail = next((tail for tail in tails if _can_follow(emotion, song, tail[0], stage + 1)), None)
+                tail = next((tail for tail in tails if _can_follow(side, song, tail[0], stage + 1)), None)
                 if tail is not None:
                     paths.append((song, *tail))
             tails = paths
         selected = list(min(tails, key=lambda path: path_rank(path, 0), default=()))
 
     if len(selected) != 3:
-        raise ScoreDataError("감정별 3곡 흐름을 만족하는 후보가 부족합니다.")
+        raise ScoreDataError("감정·쪽별 3곡 흐름을 만족하는 후보가 부족합니다.")
 
     return [
         Song(song_id=song.song_id, brightness=song.valence, energy=song.arousal, step=step)
-        for song, (_, _, step) in zip(selected, TARGETS[emotion], strict=True)
+        for song, (_, _, step) in zip(selected, SIDE_TARGETS[side], strict=True)
     ]
 
 
-def _can_follow(emotion: Emotion, previous: ScoredSong, song: ScoredSong, stage: int) -> bool:
-    if emotion == "가라앉음":
+def _can_follow(side: str, previous: ScoredSong, song: ScoredSong, stage: int) -> bool:
+    if side == "위로":
         return song.valence > previous.valence
-    if emotion == "예민함":
+    if side == "진정":
         return song.arousal < previous.arousal and (stage == 1 or song.valence > previous.valence)
     return True

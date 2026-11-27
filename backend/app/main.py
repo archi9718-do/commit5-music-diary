@@ -337,12 +337,13 @@ def create_recommendations(payload: RecommendationRequest, x_participant: Partic
                 (payload.record_id,),
             )
             songs = recommend_three(
-                payload.confirmed_emotion, {row["song_id"] for row in recent_songs}, candidates=candidates,
+                payload.confirmed_emotion, {row["song_id"] for row in recent_songs},
+                side=payload.taste_side, candidates=candidates,
             )
             # 새 추천 = 새 3곡 흐름 시작이므로 흐름 종료 일시도 비웁니다.
             cursor = con.execute(
-                "UPDATE tb_record SET emotion_final = ?, flow_ended_at = NULL WHERE record_id = ?",
-                (payload.confirmed_emotion, payload.record_id),
+                "UPDATE tb_record SET emotion_final = ?, taste_side = ?, flow_ended_at = NULL WHERE record_id = ?",
+                (payload.confirmed_emotion, payload.taste_side, payload.record_id),
             )
             if cursor.rowcount == 0:
                 raise HTTPException(status_code=404, detail="record_id가 없습니다.")

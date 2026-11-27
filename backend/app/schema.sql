@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS tb_record (
   flow_ended_at    TEXT,                                                -- 3곡 흐름 종료 일시(마지막 곡 끝·건너뛰기·재생 실패), 진행 중이면 NULL
   mood_after       TEXT    CHECK (mood_after IN ('조금 나아졌어요', '그대로예요', '더 무거워졌어요', '무응답')), -- 감상 후 응답
   mood_asked_at    TEXT,                                                -- 감상 후 질문을 화면에 띄운 일시, 안 띄웠으면 NULL
+  taste_side       TEXT    CHECK (taste_side IN ('위로','머무름','진정','발산','유지','증폭','잔잔','전환')), -- 추천에 쓴 쪽, 검사 안 했으면 NULL
   created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (user_id, record_date),
