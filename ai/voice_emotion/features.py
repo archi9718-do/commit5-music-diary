@@ -26,7 +26,7 @@ def load_encoder(name: str):
 
     repo = ENCODERS[name]
     # 서버에서는 글·받아쓰기 모델이 transformers를 먼저 불러와 HF_HOME이 안 먹으므로 경로를 직접 넘김
-    cache = os.path.join(HF_CACHE, "hub")
+    cache = os.environ.get("MOODWAVE_HF_CACHE", os.path.join(HF_CACHE, "hub"))  # ai/stt/service.py와 같은 변수
     extractor = AutoFeatureExtractor.from_pretrained(repo, cache_dir=cache, local_files_only=True)
     model = AutoModel.from_pretrained(repo, cache_dir=cache, local_files_only=True)
     model.eval()

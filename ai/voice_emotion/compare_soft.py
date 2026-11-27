@@ -6,6 +6,7 @@
 import csv
 import json
 from collections import Counter
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +25,7 @@ def ece(probs: np.ndarray, y: np.ndarray, bins: int = 15) -> float:
     conf, pred = probs.max(1), probs.argmax(1)
     edges = np.linspace(0, 1, bins + 1)
     total = 0.0
-    for lo, hi in zip(edges[:-1], edges[1:]):
+    for lo, hi in pairwise(edges):
         m = (conf > lo) & (conf <= hi)
         if m.any():
             total += m.mean() * abs((pred[m] == y[m]).mean() - conf[m].mean())
