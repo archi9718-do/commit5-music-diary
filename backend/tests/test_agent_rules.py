@@ -75,6 +75,13 @@ def test_template_against_actual_scores_becomes_generic(emotion, index, scores):
     assert texts[0] == TEMPLATES[emotion, songs[0]["step"]]
 
 
+# 11/26 DEAM 점수표 시뮬레이션: 실제 추천의 "비슷함" 차이는 최대 0.125 (좋음 3번째 곡 에너지)
+def test_similar_claim_allows_actual_deam_spread():
+    songs = target_songs("좋음")
+    songs[2]["energy"] = songs[1]["energy"] - 0.12
+    assert template_reasons("좋음", songs)[2] == TEMPLATES["좋음", songs[2]["step"]]
+
+
 def test_template_claim_covers_every_comparing_step():
     later = {(emotion, step) for emotion, stages in TARGETS.items() for _, _, step in stages[1:]}
     assert set(TEMPLATE_CLAIMS) == later
