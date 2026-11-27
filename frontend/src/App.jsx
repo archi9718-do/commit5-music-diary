@@ -3,6 +3,7 @@ import AudioLibrary from "./AudioLibrary.jsx";
 import {MOODS, moodInfo, classify, recommend, getTrack, RESPONSES, NO_MOOD_RESPONSE, canReview, hasCompletedPlayback, nextTrackState, localDay, shiftMonth, monthLabel, dateLabel, forMonth, monthlyMood, monthlyMusic, makeRecord, dayType} from "./domain.js";
 import {request, moodId, analysisResult, lpTracks, lpStates, songState, applyReasons, reasonsAction, uncertainTranscript} from "./api.js";
 import {readParticipant, startNextParticipant} from "./participant.js";
+import {NICKNAMES, OFFERED_KEY, QUESTIONS, QUESTION_ORDER, SIDE_COPY, TASTE_KEY, parseTaste, scoreTaste, tasteSideFor, typeCode} from "./taste.js";
 import {moodDestination, queueCompletion, readPendingLP, retryCompletions, runAfterReactions, saveMoodAnswer, writePendingLP} from "./postListening.js";
 
 const PAGES={
@@ -16,12 +17,18 @@ const PAGES={
   engrave:["LP 새김 확인","LP 기록"], engraved:["LP 새김 완료","LP 기록"], today:["오늘의 LP판","LP 기록"], history:["날짜별 기록","LP 기록"],
   me:["마이페이지","나의 기록"], "monthly-mood":["월간 감정 분석","나의 기록"], "monthly-music":["월간 음악 취향","나의 기록"], daytype:["Day Type","나의 기록"],
   heard:["이렇게 들었어요","감정 확인"],
+  "taste-offer":["취향 유형 검사","감정 확인"], "taste-quiz":["취향 유형 검사","감정 확인"], "taste-result":["나의 취향 유형","감정 확인"],
   failure:["감정을 분석하지 못했어요","예외 및 안내"], risk:["도움을 받을 수 있어요","예외 및 안내"], error:["문제가 발생했어요","예외 및 안내"],
 };
 const TABS=[["record","기록","note"],["history","내역","history"],["today","나의 LP","disc"],["me","마이","user"]];
 const STORE="moodwave.mvp.records.v1";
 const PREF="moodwave.mvp.entry.v1";
 const MAX_RECORDING_SECONDS=10;
+const DAY_NAMES={"가라앉음":"가라앉은 날","예민함":"예민한 날","좋음":"좋은 날","무난함":"무난한 날"};
+function TasteCard({taste}){
+  return <div className="surface center taste-card"><p>당신은 <strong>{Object.values(taste.sides).join("·")}</strong></p><h2>"{NICKNAMES[typeCode(taste.sides)]}"</h2>
+    <ul className="taste-lines">{Object.entries(taste.sides).map(([emotion,side])=><li key={emotion}><span>{DAY_NAMES[emotion]}</span> ▸ {SIDE_COPY[side]}</li>)}</ul></div>;
+}
 const read=(key, fallback)=>{try{return JSON.parse(localStorage.getItem(key)??"null")??fallback;}catch{return fallback;}};
 const write=(key,data)=>{try{localStorage.setItem(key,JSON.stringify(data));return true;}catch{return false;}};
 const route=()=>{const key=location.hash.replace(/^#\/?/,"").split("?")[0];return Object.hasOwn(PAGES,key)?key:"start";};
@@ -121,6 +128,7 @@ export default function App(){
   const [entry,setEntry]=useState(()=>read(PREF,"record")==="history"?"history":"record");
   const [records,setRecords]=useState(()=>{const a=read(STORE,[]);return Array.isArray(a)?a.filter(r=>r&&typeof r.day==="string"):[];});
   const [draft,setDraft]=useState(fresh),[result,setResult]=useState(emptyResult),[pick,setPick]=useState(null);
+  const [quiz,setQuiz]=useState(null); // 취향 유형 검사 진행: {pos, answers(문항 번호 순), from: "flow"|"daytype"}
   const [index,setIndex]=useState(0),[agreed,setAgreed]=useState(false),[message,setMessage]=useState(""),[flash,setFlash]=useState("");
   const [month,setMonth]=useState(()=>localDay().slice(0,7)),[viewDay,setViewDay]=useState(""),[demo,setDemo]=useState(false);
   const pending=useRef(false), reactions=useRef(Promise.resolve()), reactionStates=useRef({});
@@ -289,6 +297,25 @@ export default function App(){
   function accept(id){
     if(!draft.demo&&classify(draft.input).kind==="risk"){go("risk");return;}
     if(pending.current||(!draft.demo&&!draft.recordId&&!confirmReplacement()))return;
+    // 유형 검사 권유는 한 번만 (건너뛰어도 다시 묻지 않음). 위험 표현·시연 모드에서는 권하지 않음
+    if(!draft.demo&&!parseTaste(read(TASTE_KEY,null))&&!read(OFFERED_KEY,false)){
+      write(OFFERED_KEY,true);
+      patch({mood:id});
+      go("taste-offer");
+      return;
+    }
+    return recommendFor(id);
+  }
+  function startQuiz(from){setQuiz({pos:0,answers:Array(QUESTIONS.length).fill(null),from});go("taste-quiz");}
+  function answerQuiz(choice){
+    const answers=quiz.answers.with(QUESTION_ORDER[quiz.pos],choice);
+    if(quiz.pos<QUESTIONS.length-1){setQuiz({...quiz,pos:quiz.pos+1,answers});return;}
+    write(TASTE_KEY,{sides:scoreTaste(answers),answers,takenAt:new Date().toISOString()});
+    setQuiz({...quiz,answers});
+    go("taste-result",false);
+  }
+  function recommendFor(id){
+    if(pending.current)return;
     return run(async()=>{
       let recordId=draft.recordId, tracks={}, songs=recommend(id);
       if(!draft.demo){
@@ -297,7 +324,8 @@ export default function App(){
           recordId=record.record_id;
           patch({recordId,replacing:true,saved:false});
         }
-        await request("/recommendations","POST",{record_id:recordId,confirmed_emotion:moodInfo(id).label});
+        const label=moodInfo(id).label, side=tasteSideFor(parseTaste(read(TASTE_KEY,null)),label);
+        await request("/recommendations","POST",{record_id:recordId,confirmed_emotion:label,...(side?{taste_side:side}:{})});
         const lp=await request(`/records/${recordId}/lp`);
         songs=lpTracks(lp.songs,id);
         tracks=lpStates(lp.songs);
@@ -466,10 +494,16 @@ export default function App(){
     }
     if(["recommend","player","react","complete","engrave"].includes(page)&&!draft.mood)go("record",false);
     if(page==="heard"&&!draft.input)go("record",false); // 새로고침 등으로 받아쓴 글이 사라지면 기록 화면으로
+    // 유형 검사 화면: 추천 흐름이면 고른 감정이 있어야 하고, 검사 진행·결과가 없으면 처음으로
+    const fromDaytype=quiz?.from==="daytype";
+    if(page==="taste-offer"&&!draft.mood)go("record",false);
+    if(page==="taste-quiz"&&!quiz)go(draft.mood?"taste-offer":"daytype",false);
+    if(["taste-quiz","taste-result"].includes(page)&&!fromDaytype&&!draft.mood)go("record",false);
+    if(page==="taste-result"&&!parseTaste(read(TASTE_KEY,null)))go(draft.mood?"taste-offer":"daytype",false);
     if(page==="voice"&&!agreed)go("consent",false);
     if(page==="complete"&&draft.mood&&!draft.askMood)go("react",false);
     if(page!=="complete"&&draft.askMood)patch({askMood:false});
-  },[page,draft.mood,draft.askMood,agreed,recovery]);
+  },[page,draft.mood,draft.askMood,agreed,recovery,quiz]);
   const savePref=to=>{setEntry(to);if(write(PREF,to))setFlash("첫 화면 설정을 저장했어요.");else setFlash("설정을 이 브라우저에 저장할 수 없어요.");};
   const nextParticipant=()=>{
     if(!window.confirm("지금 기록이 이 기기에서 지워져요. 다음 참여자로 시작할까요?"))return;
@@ -523,7 +557,10 @@ export default function App(){
         return <><Heading title="월간 감정 분석" desc="이 브라우저에 저장한 확정 감정을 모았어요."/><MonthSelect month={month} onChange={setMonth}/>{thisMonth.length?<div className="surface"><div className="month-character"><span style={{background:mainMood.color}}>{mainMood.symbol}</span><p>가장 많이 기록한 감정</p><strong>{mainMood.label}</strong></div>{stats.map(m=><div key={m.id} className="stats"><Mood id={m.id}/><div><i style={{width:`${m.count/max*100}%`,background:m.hue}}/></div><span>{m.count}일</span></div>)}</div>:<div className="empty">이 달에는 감정 기록이 없어요.</div>}<Notice>감정 분포를 보여주는 요약이에요. 성격이나 건강 상태를 판단하지 않아요.</Notice></>;
       }
       case "monthly-music":{const list=monthlyMusic(thisMonth);return <><Heading title="월간 음악 취향" desc="내가 좋아요하거나 끝까지 들은 시연 곡의 기록이에요."/><MonthSelect month={month} onChange={setMonth}/>{list.length?<div className="cards">{list.map(t=><div className="track-card" key={t.id}><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>완청 {t.completed} · 좋아요 {t.liked} · 새김 {t.engraved}</small></div></div>)}</div>:<div className="empty">이 달에는 감상 기록이 없어요.</div>}</>;}
-      case "daytype":{const summary=dayType(todaysRecord?.mood);return <><Heading title="Day Type" desc="오늘 남긴 기록으로 하루를 돌아봐요."/><LP/>{summary?<div className="surface center"><h2>{summary.title}</h2><Mood id={todaysRecord.mood}/><p>{summary.copy}</p><small>직접 확정한 감정에 맞춘 시연용 문구예요.</small></div>:<div className="empty">오늘의 LP판을 저장하면 이곳에서 볼 수 있어요.</div>}<div className="actions"><Btn variant="secondary" onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;}
+      case "taste-offer":return <><Heading title="1분 검사로 더 맞는 노래를 골라 드려요" desc="12문항 · 둘 중 하나 고르기"/><LP/><div className="actions"><Btn disabled={busy} onClick={()=>startQuiz("flow")}>검사하기</Btn><Btn disabled={busy} variant="secondary" onClick={()=>recommendFor(draft.mood)}>건너뛰기</Btn></div></>;
+      case "taste-quiz":{if(!quiz)return null;const question=QUESTIONS[QUESTION_ORDER[quiz.pos]];return <><Heading title={question.text} desc={`${quiz.pos+1} / ${QUESTIONS.length}`}/><div className="actions">{[["가",question.a],["나",question.b]].map(([choice,text])=><Btn key={`${quiz.pos}-${choice}`} variant="secondary" onClick={()=>answerQuiz(choice)}>{text}</Btn>)}</div></>;}
+      case "taste-result":{const taste=parseTaste(read(TASTE_KEY,null));if(!taste)return null;const toFlow=quiz?.from!=="daytype"&&draft.mood;return <><Heading title="나의 취향 유형"/><TasteCard taste={taste}/><div className="actions">{toFlow?<Btn disabled={busy} onClick={()=>recommendFor(draft.mood)}>추천 받으러 가기</Btn>:<Btn onClick={()=>go("daytype")}>확인</Btn>}</div></>;}
+      case "daytype":{const summary=dayType(todaysRecord?.mood),taste=parseTaste(read(TASTE_KEY,null));return <><Heading title="Day Type" desc="오늘 남긴 기록으로 하루를 돌아봐요."/>{taste?<><TasteCard taste={taste}/><div className="actions"><Btn variant="secondary" onClick={()=>startQuiz("daytype")}>다시 검사하기</Btn></div></>:<div className="actions"><Btn variant="secondary" onClick={()=>startQuiz("daytype")}>유형 검사하기</Btn></div>}<LP/>{summary?<div className="surface center"><h2>{summary.title}</h2><Mood id={todaysRecord.mood}/><p>{summary.copy}</p><small>직접 확정한 감정에 맞춘 시연용 문구예요.</small></div>:<div className="empty">오늘의 LP판을 저장하면 이곳에서 볼 수 있어요.</div>}<div className="actions"><Btn variant="secondary" onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;}
       case "heard":return <><Heading title="이렇게 들었어요" desc="소리가 짧거나 주변 소리일 수 있어서 아직 저장하지 않았어요."/><div className="surface center"><h2>“{draft.input}”</h2></div><div className="actions"><Btn onClick={manual}>이대로 기록하기</Btn><Btn variant="secondary" onClick={()=>go("voice")}>다시 녹음하기</Btn><button className="link" onClick={()=>go("record")}>글로 기록하기</button></div><Notice>이대로 기록하면 감정을 직접 골라 주세요. 다시 녹음하거나 나가면 오늘 기록은 그대로예요.</Notice></>;
       case "failure":return <><Heading title={PAGES.failure[0]} desc={message||"지금 마음은 직접 고를 수 있어요."}/><div className="actions"><Btn onClick={manual}>감정 직접 선택</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 다시 기록하기</Btn></div></>;
       case "risk":return <><Heading title="도움을 받을 수 있어요" desc="지금 힘들다면 혼자 감당하지 않아도 돼요."/><div className="surface"><h2>한국 자살예방상담전화</h2><p>109에서 24시간 상담을 받을 수 있어요. 지금 바로 안전을 지키기 어렵다면 119에 연락하세요.</p><div className="actions"><a className="btn primary" href="tel:109">109에 전화하기</a><a className="btn secondary" href="https://www.129.go.kr/109" target="_blank" rel="noreferrer">공식 상담 안내 보기</a></div></div><Notice>이 화면은 일부 문구를 확인하는 안내 시연이에요. 앱이 위기 여부를 진단하거나 상담을 연결해주지는 않아요.</Notice><div className="actions"><Btn variant="secondary" onClick={startNew}>기록 화면으로</Btn></div></>;

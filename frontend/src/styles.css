@@ -138,3 +138,6 @@ h1:focus{outline:none}
 @media (max-width:350px){.screen{padding-inline:14px}.track-card{padding:8px;gap:6px}.cover{width:40px;height:40px}.track-controls{min-width:70px}.icon.queue-like{width:27px}.icon.play{width:31px;height:31px}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 .participant-code{font-size:1.6em;letter-spacing:.15em}
+/* 취향 유형 결과 카드 */
+.taste-lines{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:4px;text-align:left}
+.taste-lines span{display:inline-block;min-width:5.5em;font-weight:600}
