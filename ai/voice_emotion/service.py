@@ -33,11 +33,15 @@ def warm_up() -> None:
     if meta["encoder"] not in ENCODERS or list(meta["classes"]) != list(EMOTIONS):
         raise RuntimeError("meta.json의 인코더·감정 순서가 코드와 다릅니다")
 
+    weight = float(meta["w"])
+    if not 0.0 <= weight <= 1.0:
+        raise ValueError("meta.json의 목소리 가중치 w는 0 이상 1 이하여야 합니다")
+
     extractor, model = load_encoder(meta["encoder"])
     head = torch.nn.Linear(model.config.hidden_size, len(EMOTIONS))
     head.load_state_dict(torch.load(folder / "head.pt"))
     head.eval()
-    _MODEL.update(extractor=extractor, model=model, head=head, w=float(meta["w"]))
+    _MODEL.update(extractor=extractor, model=model, head=head, w=weight)
     _voice_probs(np.zeros(SR, dtype=np.float32))
 
 

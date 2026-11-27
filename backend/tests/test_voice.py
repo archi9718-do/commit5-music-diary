@@ -136,8 +136,9 @@ VOICE_PROBS = {"좋음": 0.9, "무난함": 0.05, "가라앉음": 0.03, "예민�
 class FakeVoiceService:
     """ai.voice_emotion.service와 같은 이름의 함수 2개만 흉내 냅니다."""
 
-    def __init__(self, warm_up_error=None, combine_error=None):
+    def __init__(self, warm_up_error=None, combine_error=None, probs=None):
         self.warm_up_error, self.combine_error = warm_up_error, combine_error
+        self.probs = VOICE_PROBS if probs is None else probs
         self.calls = 0
 
     def warm_up(self):
@@ -148,7 +149,7 @@ class FakeVoiceService:
         self.calls += 1
         if self.combine_error:
             raise self.combine_error
-        return {**result, "probs": VOICE_PROBS, "emotion": "좋음", "confidence": "높음"}
+        return {**result, "probs": self.probs, "emotion": "좋음", "confidence": "높음"}
 
 
 def saved_emotion():
@@ -173,6 +174,7 @@ def test_voice_fusion_saved_when_ready(monkeypatch):
 
 @pytest.mark.parametrize("voice", [
     FakeVoiceService(combine_error=RuntimeError("인코더 오류")),  # 합치기 중 오류 → 글 결과 유지
+    FakeVoiceService(probs={**VOICE_PROBS, "좋음": 1.2}),  # 결합 결과 검증 실패 → 글 결과 유지
     FakeVoiceService(warm_up_error=RuntimeError("목소리 감정 꺼짐 판정")),  # meta.json enabled=false
     None,  # 패키지 없음
 ])

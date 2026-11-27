@@ -191,7 +191,7 @@ def _log_model_failure(label: str, exc: Exception) -> None:
 
 
 def _analyze_and_save(text: str, participant: str | None = None, audio: bytes | None = None) -> EmotionResult:
-    """글 분석 → (녹음이면) 목소리와 합치기 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
+    """글 감정을 검증하고, 녹음이면 검증된 결합 결과를 우선해 저장합니다."""
     _check_emotion_ready()
 
     # 1) 감정 분석 먼저 (아직 DB에 아무것도 쓰지 않음)
@@ -201,14 +201,6 @@ def _analyze_and_save(text: str, participant: str | None = None, audio: bytes | 
         _log_model_failure("감정 분석", exc)
         raise HTTPException(status_code=503, detail="감정 분석 중 오류가 났습니다. 잠시 후 다시 시도하세요.") from exc
 
-    # 1-2) 녹음이면 목소리 확률을 섞음. 실패하면 글 결과 그대로 (기록은 막지 않음)
-    if audio is not None and VOICE_STATUS["ready"] and voice_service is not None:
-        try:
-            result = voice_service.combine(result, audio)
-        # 의도한 넓은 예외 처리: 목소리 쪽 어떤 오류든 글 감정만으로 계속합니다.
-        except Exception as exc:  # noqa: BLE001
-            _log_model_failure("목소리 감정", exc)
-
     # 2) 결과 양식 검사: /api/emotions와 같은 규칙(schemas.EmotionResult)으로 확인
     try:
         checked = EmotionResult(**{**result, "record_id": 1, "text": text})  # record_id는 저장 후 채움
@@ -216,6 +208,14 @@ def _analyze_and_save(text: str, participant: str | None = None, audio: bytes | 
         # 검증 예외 본문에는 사용자의 일기나 모델 입력값이 포함될 수 있습니다.
         logger.error("감정 결과 양식 오류: %s", type(exc).__name__)
         raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
+
+    # 2-2) 유효한 결합 결과만 채택하고, 실패하면 검증해 둔 글 결과로 저장합니다.
+    if audio is not None and VOICE_STATUS["ready"] and voice_service is not None:
+        try:
+            combined = voice_service.combine(result, audio)
+            checked = EmotionResult(**{**combined, "record_id": 1, "text": text})
+        except Exception as exc:  # noqa: BLE001
+            _log_model_failure("목소리 감정", exc)
 
     # 3) 기록과 감정 결과를 한 번에 저장 (/api/emotions와 같은 칸에 저장)
     con = connect()
@@ -238,7 +238,7 @@ MAX_AUDIO_BYTES = 3 * 1024 * 1024  # 10초 wav(48kHz 스테레오) 약 1.9MB + �
 
 @app.post("/api/records/voice", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
 async def analyze_voice(request: Request, x_participant: Participant = None):
-    """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기 → 글 감정 분석 → 저장까지 합니다.
+    """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기와 감정 분석을 거쳐 저장합니다.
 
     - 응답·저장·같은 날 덮어쓰기 규칙은 POST /api/records/analyze와 같습니다.
     - 녹음은 메모리에서만 처리하고 디스크에 쓰지 않습니다(multipart 임시 파일 없음).
