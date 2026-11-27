@@ -45,6 +45,14 @@ class RecommendationRequest(BaseModel):
     record_id: int = Field(gt=0)
     # 예측 emotion이 아닌 '사용자가 최종 확인한 감정'을 받아야 합니다.
     confirmed_emotion: Emotion
+    # 취향 유형 검사를 안 했으면 없음(None) → 기본 쪽으로 추천하고 DB에는 NULL
+    taste_side: TasteSide | None = None
+
+    @model_validator(mode="after")
+    def check_side_matches_emotion(self):
+        if self.taste_side is not None and self.taste_side not in SIDES[self.confirmed_emotion]:
+            raise ValueError(f"taste_side는 {SIDES[self.confirmed_emotion]} 중 하나여야 합니다")
+        return self
 
 
 class Song(BaseModel):

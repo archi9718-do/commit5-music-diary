@@ -42,9 +42,10 @@ def agent(monkeypatch):
     return fake
 
 
-def recommend(client, text="오늘 좀 지쳤어", emotion="가라앉음"):
+def recommend(client, text="오늘 좀 지쳤어", emotion="가라앉음", **extra):
     record_id = client.post("/api/records", json={"text": text}).json()["record_id"]
-    assert client.post("/api/recommendations", json={"record_id": record_id, "confirmed_emotion": emotion}).status_code == 200
+    body = {"record_id": record_id, "confirmed_emotion": emotion, **extra}
+    assert client.post("/api/recommendations", json=body).status_code == 200
     return record_id
 
 
@@ -71,6 +72,12 @@ def test_agent_receives_facts_without_diary_text(client, agent):
     assert all(0 <= s["brightness"] <= 1 and 0 <= s["energy"] <= 1 for s in facts["songs"])
     assert facts["recent_moods"] == []
     assert "오늘 좀 지쳤어" not in repr(facts)
+
+
+def test_agent_receives_taste_side(client, agent):
+    record_id = recommend(client, taste_side="머무름")
+    client.post(f"/api/records/{record_id}/reasons")
+    assert agent.facts[0]["today"] == {"confirmed_emotion": "가라앉음", "taste_side": "머무름"}
 
 
 def test_agent_failure_gives_template(client, monkeypatch):

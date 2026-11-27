@@ -51,7 +51,7 @@ def create_reasons(record_id: int = PathParam(gt=0)):
     """곡마다 이유 한 줄. 위험 표현 기록은 LLM을 부르지 않고 risk=true. 실패해도 200 + 템플릿."""
     with closing(connect()) as con:
         record = con.execute(
-            "SELECT user_id, record_date, record_text, emotion_final FROM tb_record WHERE record_id = ?",
+            "SELECT user_id, record_date, record_text, emotion_final, taste_side FROM tb_record WHERE record_id = ?",
             (record_id,),
         ).fetchone()
         if record is None:
@@ -78,7 +78,7 @@ def create_reasons(record_id: int = PathParam(gt=0)):
     source, risk = "template", is_risk(record["record_text"])
     if not risk and agent_ready():
         facts = {
-            "today": {"confirmed_emotion": emotion, "taste_side": None},  # taste_side: 취향 유형 작업 4 뒤에 채움
+            "today": {"confirmed_emotion": emotion, "taste_side": record["taste_side"]},
             "songs": songs,
             "recent_moods": [{"date": row["record_date"], "emotion": row["emotion_final"]} for row in recent],
         }

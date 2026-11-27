@@ -47,6 +47,7 @@ def init_db() -> None:
     try:
         with con:
             con.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+            add_taste_side_column(con)
             init_audio_catalog(con)
             con.execute(
                 "INSERT OR IGNORE INTO tb_user (email, password_hash) VALUES (?, ?)",
@@ -54,6 +55,15 @@ def init_db() -> None:
             )
     finally:
         con.close()
+
+
+def add_taste_side_column(con: sqlite3.Connection) -> None:
+    """취향 유형 전에 만든 DB에 taste_side 열을 더합니다 (CREATE TABLE IF NOT EXISTS는 열을 안 늘림)."""
+    if "taste_side" not in {row[1] for row in con.execute("PRAGMA table_info(tb_record)")}:
+        con.execute(
+            "ALTER TABLE tb_record ADD COLUMN taste_side TEXT "
+            "CHECK (taste_side IN ('위로','머무름','진정','발산','유지','증폭','잔잔','전환'))"
+        )
 
 
 def init_audio_catalog(con: sqlite3.Connection) -> None:
@@ -99,7 +109,7 @@ def save_today_record(
 ) -> int:
     """오늘 기록을 저장하고 record_id를 돌려줍니다. (팀 결정 2: 같은 날 다시 기록하면 덮어쓰기)
 
-    덮어쓸 때 감정·흐름 종료·추천곡은 새로 시작하고,
+    덮어쓸 때 감정·취향 쪽·흐름 종료·추천곡은 새로 시작하고,
     감상 후 응답(mood_after)과 질문 표시 일시(mood_asked_at)는 남겨서 질문이 하루 1번만 나오게 합니다.
     """
     probs_json = json.dumps(emotion_probs, ensure_ascii=False) if emotion_probs is not None else None
@@ -114,6 +124,7 @@ def save_today_record(
                confidence_level = excluded.confidence_level,
                emotion_probs    = excluded.emotion_probs,
                emotion_final    = NULL,
+               taste_side       = NULL,
                flow_ended_at    = NULL""",
         (user_id, record_date, text, emotion_pred, confidence_level, probs_json),
     )
