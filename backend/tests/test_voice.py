@@ -127,3 +127,68 @@ def test_uncertain_transcript_is_shown_first_and_saves_nothing(monkeypatch, tmp_
     assert after["text"] == "오늘의 진짜 일기"
     assert [s["song_id"] for s in after["songs"]] == [s["song_id"] for s in before["songs"]]
     assert count_records() == 1
+
+
+# --- 목소리 감정 합치기 (Task 7) -------------------------------------------
+VOICE_PROBS = {"좋음": 0.9, "무난함": 0.05, "가라앉음": 0.03, "예민함": 0.02}
+
+
+class FakeVoiceService:
+    """ai.voice_emotion.service와 같은 이름의 함수 2개만 흉내 냅니다."""
+
+    def __init__(self, warm_up_error=None, combine_error=None):
+        self.warm_up_error, self.combine_error = warm_up_error, combine_error
+        self.calls = 0
+
+    def warm_up(self):
+        if self.warm_up_error:
+            raise self.warm_up_error
+
+    def combine(self, result, audio_bytes):
+        self.calls += 1
+        if self.combine_error:
+            raise self.combine_error
+        return {**result, "probs": VOICE_PROBS, "emotion": "좋음", "confidence": "높음"}
+
+
+def saved_emotion():
+    from app.db import connect
+
+    con = connect()
+    try:
+        return con.execute("SELECT emotion_pred FROM tb_record").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_voice_fusion_saved_when_ready(monkeypatch):
+    monkeypatch.setattr(main, "stt_service", FakeSttService())
+    monkeypatch.setattr(main, "voice_service", FakeVoiceService())
+    with TestClient(main.app) as client:
+        res = post_voice(client)
+        assert res.status_code == 201
+        assert res.json()["emotion"] == "좋음" and res.json()["probs"] == VOICE_PROBS
+        assert saved_emotion() == "좋음"
+
+
+@pytest.mark.parametrize("voice", [
+    FakeVoiceService(combine_error=RuntimeError("인코더 오류")),  # 합치기 중 오류 → 글 결과 유지
+    FakeVoiceService(warm_up_error=RuntimeError("목소리 감정 꺼짐 판정")),  # meta.json enabled=false
+    None,  # 패키지 없음
+])
+def test_voice_unavailable_keeps_text_result(monkeypatch, voice):
+    monkeypatch.setattr(main, "stt_service", FakeSttService())
+    monkeypatch.setattr(main, "voice_service", voice)
+    with TestClient(main.app) as client:
+        res = post_voice(client)
+        assert res.status_code == 201
+        assert res.json()["probs"] == FAKE_PROBS
+        assert saved_emotion() == "예민함"
+
+
+def test_text_records_never_use_voice(monkeypatch):
+    voice = FakeVoiceService()
+    monkeypatch.setattr(main, "voice_service", voice)
+    with TestClient(main.app) as client:
+        assert client.post("/api/records/analyze", json={"text": "오늘 좀 지쳤어"}).status_code == 201
+    assert voice.calls == 0
