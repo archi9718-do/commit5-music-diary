@@ -54,12 +54,13 @@ TARGETS: dict[str, tuple[tuple[float, float, str], ...]] = {
 SIDE_TARGETS: dict[str, tuple[tuple[float, float, str], ...]] = {
     **{default: TARGETS[emotion] for emotion, (default, _) in SIDES.items()},
     "머무름": ((0.20, 0.30, "맞추기"), (0.22, 0.25, "곁에 머물기"), (0.28, 0.22, "잔잔하게 마무리")),
-    "발산": ((0.25, 0.85, "맞추기"), (0.22, 0.88, "쏟아내기"), (0.30, 0.80, "끝까지 쏟아내기")),
+    # DEAM에 밝기 < 0.45·에너지 ≥ 0.8인 곡이 1곡뿐이라 목표를 데이터 안(에너지 상위 약 4%)으로 낮춤 (11/27)
+    "발산": ((0.30, 0.70, "맞추기"), (0.28, 0.74, "쏟아내기"), (0.30, 0.78, "끝까지 쏟아내기")),
     "증폭": ((0.80, 0.70, "맞추기"), (0.83, 0.80, "더 신나게"), (0.85, 0.88, "끌어올리기")),
     "전환": ((0.50, 0.40, "맞추기"), (0.65, 0.55, "조금 밝게"), (0.78, 0.65, "활기차게")),
 }
 # 밝기·에너지가 정해진 방향으로만 이어져야 하는 쪽 (_can_follow)
-ORDERED_SIDES = {"위로", "진정"}
+ORDERED_SIDES = {"위로", "진정", "발산"}
 
 
 def load_song_scores(csv_path: Path) -> list[ScoredSong]:
@@ -175,7 +176,7 @@ def recommend_three(
                 tuple(rank(song, stage) for stage, song in enumerate(path, start)),
             )
 
-        # 위로·진정은 밝기 또는 에너지가 계속 변하므로 같은 곡이 다시 나올 수 없습니다.
+        # 위로·진정·발산은 밝기 또는 에너지가 계속 변하므로 같은 곡이 다시 나올 수 없습니다.
         # 마지막부터 각 후보가 이어 갈 수 있는 최선의 조합을 찾아 모든 유효한 첫 곡을 비교합니다.
         tails: list[tuple[ScoredSong, ...]] = [(song,) for song in candidates]
         for stage in (1, 0):
@@ -202,4 +203,6 @@ def _can_follow(side: str, previous: ScoredSong, song: ScoredSong, stage: int) -
         return song.valence > previous.valence
     if side == "진정":
         return song.arousal < previous.arousal and (stage == 1 or song.valence > previous.valence)
+    if side == "발산":
+        return song.arousal > previous.arousal
     return True

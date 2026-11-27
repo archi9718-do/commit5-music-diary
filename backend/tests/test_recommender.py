@@ -111,6 +111,20 @@ def test_new_sides_return_three_songs_with_their_steps(monkeypatch, emotion, sid
     assert len({s.song_id for s in songs}) == 3
 
 
+def test_burst_energy_never_drops():
+    # DEAM처럼 어둡고 센 곡이 하나만 튀는 경우: 그 곡이 첫 곡이 되면 2·3번째 에너지가 떨어졌음 (11/27)
+    from app.recommender import ScoredSong
+    songs = [
+        ScoredSong("deam_1", "DEAM", 0.35, 0.85),
+        ScoredSong("deam_2", "DEAM", 0.28, 0.74),
+        ScoredSong("deam_3", "DEAM", 0.31, 0.75),
+        ScoredSong("deam_4", "DEAM", 0.28, 0.70),
+        ScoredSong("deam_5", "DEAM", 0.33, 0.71),
+    ]
+    picked = recommend_three("예민함", side="발산", candidates=songs)
+    assert picked[0].energy < picked[1].energy < picked[2].energy
+
+
 @pytest.mark.parametrize("emotion", ["좋음", "무난함", "가라앉음", "예민함"])
 def test_default_side_equals_no_side(monkeypatch, emotion):
     monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(FIXTURE))
