@@ -1,6 +1,6 @@
 # secondary_threshold.py
 # 부감정(합친 확률의 2위)을 보여줄 기준값을 고릅니다. 정답은 평가자 5명 중 2명 이상이 고른 다른 감정.
-# 검증 세트만 봅니다. 평가(test) 세트는 읽지 않습니다. 결과는 저장소 밖 RESULT_PATH.
+# 임곗값 채점에는 검증 세트를 사용합니다. 결과는 저장소 밖 RESULT_PATH.
 # 저장소 최상위에서 python -m ai.voice_emotion.secondary_threshold 로 실행합니다.
 import csv
 import json
@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
 from ai.emotion.emotion_mapper import EMOTIONS
 
 from .compare_soft import load_votes
@@ -20,10 +21,10 @@ THRESHOLDS = (0.15, 0.20, 0.25, 0.30, 0.35, 0.40)
 RESULT_PATH = Path(r"C:\work\moodwave_data\results\secondary_threshold.json")
 
 
-def secondary(probs: dict, threshold: float) -> str | None:
-    """2위 감정. 2위 확률이 기준값보다 낮으면 None."""
-    second, p = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)[1]
-    return second if p >= threshold else None
+def secondary(probs: dict[str, float], primary: str, threshold: float) -> str | None:
+    """모델의 1위를 제외한 감정 중 확률이 기준값 이상인 가장 높은 감정."""
+    second = max((label for label in probs if label != primary), key=probs.__getitem__)
+    return second if probs[second] >= threshold else None
 
 
 def human_seconds(counts: Counter, top: str, min_votes: int) -> set[str]:
@@ -32,23 +33,27 @@ def human_seconds(counts: Counter, top: str, min_votes: int) -> set[str]:
 
 
 def score(results: list[dict], votes: list[Counter], golds: list[str], threshold: float) -> dict:
-    shown = [(secondary(r["probs"], threshold), v, g) for r, v, g in zip(results, votes, golds)]
-    shown = [(s, v, g) for s, v, g in shown if s]
-    has2 = [bool(human_seconds(v, g, 2)) for v, g in zip(votes, golds)]
-    hit2 = sum(s in human_seconds(v, g, 2) for s, v, g in shown)
+    shown = []
+    for result, vote, gold in zip(results, votes, golds, strict=True):
+        primary = result["emotion"]
+        second = secondary(result["probs"], primary, threshold)
+        if second is not None:
+            shown.append((second, primary, vote, gold))
+
+    human_second_count = sum(bool(human_seconds(v, g, 2)) for v, g in zip(votes, golds))
+    hit2 = sum(second in human_seconds(v, g, 2) for second, _, v, g in shown)
+    hit1 = sum(second in human_seconds(v, g, 1) for second, _, v, g in shown)
+    # 같은 녹음에서 모델의 1위를 뺀 감정 중 하나를 균등하게 고릅니다.
+    random_hits = sum(len(human_seconds(v, g, 2) - {primary}) for _, primary, v, g in shown)
+    shown_count = len(shown)
     return {
         "threshold": threshold,
-        "보여준_비율": round(len(shown) / len(results), 4),
-        "맞음_2표이상": round(hit2 / len(shown), 4) if shown else None,
-        "맞음_1표이상": round(sum(s in human_seconds(v, g, 1) for s, v, g in shown) / len(shown), 4) if shown else None,
-        "사람2표_찾은_비율": round(hit2 / sum(has2), 4) if any(has2) else None,
+        "보여준_비율": round(shown_count / len(results), 4),
+        "맞음_2표이상": round(hit2 / shown_count, 4) if shown_count else None,
+        "맞음_1표이상": round(hit1 / shown_count, 4) if shown_count else None,
+        "무작위_기준": round(random_hits / ((len(EMOTIONS) - 1) * shown_count), 4) if shown_count else None,
+        "사람2표_찾은_비율": round(hit2 / human_second_count, 4) if human_second_count else None,
     }
-
-
-def chance(results: list[dict], votes: list[Counter], golds: list[str]) -> float:
-    """1위를 뺀 3개 중 아무거나 골랐을 때 2표 이상 감정과 맞을 기대 비율."""
-    hits = [len(human_seconds(v, g, 2) - {r["emotion"]}) / 3 for r, v, g in zip(results, votes, golds)]
-    return round(float(np.mean(hits)), 4)
 
 
 def main() -> None:
@@ -91,9 +96,8 @@ def main() -> None:
           f"사람이 2표 이상 준 다른 4종 감정이 있는 비율 {has2:.1%}")
     out = {"n_val": len(golds), "head": "분포" if args.soft else "다수결", "w": meta["w"], "사람2표_비율": float(has2)}
     for name, results in sources.items():
-        out[name] = {"무작위_기준": chance(results, votes, golds),
-                     "table": [score(results, votes, golds, t) for t in THRESHOLDS]}
-        print(f"[{name}] 무작위로 골랐을 때 맞음_2표이상 {out[name]['무작위_기준']}")
+        out[name] = {"table": [score(results, votes, golds, t) for t in THRESHOLDS]}
+        print(f"[{name}] 임곗값별 표시 비율과 일치율")
         for r in out[name]["table"]:
             print(" ", r)
     path = RESULT_PATH.with_stem(RESULT_PATH.stem + ("_soft" if args.soft else ""))
