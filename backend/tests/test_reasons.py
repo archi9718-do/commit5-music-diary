@@ -1,7 +1,9 @@
 """POST /api/records/{record_id}/reasons 시험. 에이전트는 가짜로 바꿔 끼워 실제 API를 부르지 않습니다."""
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
+from threading import Event
 
 import pytest
 from ai.agent.rules import GENERIC_TEMPLATE
@@ -78,6 +80,46 @@ def test_agent_receives_taste_side(client, agent):
     record_id = recommend(client, taste_side="머무름")
     client.post(f"/api/records/{record_id}/reasons")
     assert agent.facts[0]["today"] == {"confirmed_emotion": "가라앉음", "taste_side": "머무름"}
+
+
+def test_agent_reads_same_recommendation_when_songs_are_replaced(client, agent, monkeypatch):
+    # WAL에서는 이유 요청이 읽는 도중에도 재추천이 커밋될 수 있습니다.
+    with closing(db.connect()) as con:
+        assert con.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+    record_id = recommend(client, taste_side="위로")
+    previous_ids = song_ids(client, record_id)
+
+    before_songs = Event()
+    resume = Event()
+
+    def trace(statement):
+        if statement.startswith("SELECT recommend_order, song_id, step"):
+            before_songs.set()
+            resume.wait(timeout=10)
+
+    def traced_connect():
+        con = db.connect()
+        con.set_trace_callback(trace)
+        return con
+
+    monkeypatch.setattr(reasons, "connect", traced_connect)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(client.post, f"/api/records/{record_id}/reasons")
+        try:
+            assert before_songs.wait(timeout=5)
+            updated = client.post("/api/recommendations", json={
+                "record_id": record_id, "confirmed_emotion": "가라앉음", "taste_side": "머무름",
+            })
+            assert updated.status_code == 200
+            assert updated.json()["songs"][1]["step"] == "곁에 머물기"
+        finally:
+            resume.set()
+        assert pending.result(timeout=5).status_code == 200
+
+    facts = agent.facts[0]
+    assert facts["today"]["taste_side"] == "위로"
+    assert [song["step"] for song in facts["songs"]] == ["맞추기", "조금 밝게", "더 밝게"]
+    assert [song["song_id"] for song in facts["songs"]] == previous_ids
 
 
 def test_agent_failure_gives_template(client, monkeypatch):

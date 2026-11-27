@@ -50,6 +50,8 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="reasons")
 def create_reasons(record_id: int = PathParam(gt=0)):
     """곡마다 이유 한 줄. 위험 표현 기록은 LLM을 부르지 않고 risk=true. 실패해도 200 + 템플릿."""
     with closing(connect()) as con:
+        # 재추천이 겹쳐도 기록과 곡 목록을 같은 시점에서 읽습니다.
+        con.execute("BEGIN")
         record = con.execute(
             "SELECT user_id, record_date, record_text, emotion_final, taste_side FROM tb_record WHERE record_id = ?",
             (record_id,),

@@ -310,11 +310,12 @@ export default function App(){
   function answerQuiz(choice){
     const answers=quiz.answers.with(QUESTION_ORDER[quiz.pos],choice);
     if(quiz.pos<QUESTIONS.length-1){setQuiz({...quiz,pos:quiz.pos+1,answers});return;}
-    write(TASTE_KEY,{sides:scoreTaste(answers),answers,takenAt:new Date().toISOString()});
-    setQuiz({...quiz,answers});
+    const taste={sides:scoreTaste(answers),answers,takenAt:new Date().toISOString()};
+    const tasteSaved=write(TASTE_KEY,taste);
+    setQuiz({...quiz,answers,taste,tasteSaved});
     go("taste-result",false);
   }
-  function recommendFor(id,{useTaste=true}={}){
+  function recommendFor(id,{taste=parseTaste(read(TASTE_KEY,null))}={}){
     if(pending.current)return;
     return run(async()=>{
       let recordId=draft.recordId, tracks={}, songs=recommend(id);
@@ -325,7 +326,7 @@ export default function App(){
           patch({recordId,replacing:true,saved:false});
         }
         const label=moodInfo(id).label;
-        const side=useTaste?tasteSideFor(parseTaste(read(TASTE_KEY,null)),label):undefined;
+        const side=tasteSideFor(taste,label);
         await request("/recommendations","POST",{record_id:recordId,confirmed_emotion:label,...(side?{taste_side:side}:{})});
         const lp=await request(`/records/${recordId}/lp`);
         songs=lpTracks(lp.songs,id);
@@ -500,7 +501,7 @@ export default function App(){
     if(page==="taste-offer"&&!draft.mood)go("record",false);
     if(page==="taste-quiz"&&!quiz)go(draft.mood?"taste-offer":"daytype",false);
     if(["taste-quiz","taste-result"].includes(page)&&!fromDaytype&&!draft.mood)go("record",false);
-    if(page==="taste-result"&&!parseTaste(read(TASTE_KEY,null)))go(draft.mood?"taste-offer":"daytype",false);
+    if(page==="taste-result"&&!quiz?.taste&&!parseTaste(read(TASTE_KEY,null)))go(draft.mood?"taste-offer":"daytype",false);
     if(page==="voice"&&!agreed)go("consent",false);
     if(page==="complete"&&draft.mood&&!draft.askMood)go("react",false);
     if(page!=="complete"&&draft.askMood)patch({askMood:false});
@@ -558,9 +559,16 @@ export default function App(){
         return <><Heading title="월간 감정 분석" desc="이 브라우저에 저장한 확정 감정을 모았어요."/><MonthSelect month={month} onChange={setMonth}/>{thisMonth.length?<div className="surface"><div className="month-character"><span style={{background:mainMood.color}}>{mainMood.symbol}</span><p>가장 많이 기록한 감정</p><strong>{mainMood.label}</strong></div>{stats.map(m=><div key={m.id} className="stats"><Mood id={m.id}/><div><i style={{width:`${m.count/max*100}%`,background:m.hue}}/></div><span>{m.count}일</span></div>)}</div>:<div className="empty">이 달에는 감정 기록이 없어요.</div>}<Notice>감정 분포를 보여주는 요약이에요. 성격이나 건강 상태를 판단하지 않아요.</Notice></>;
       }
       case "monthly-music":{const list=monthlyMusic(thisMonth);return <><Heading title="월간 음악 취향" desc="내가 좋아요하거나 끝까지 들은 시연 곡의 기록이에요."/><MonthSelect month={month} onChange={setMonth}/>{list.length?<div className="cards">{list.map(t=><div className="track-card" key={t.id}><Cover theme={t.theme}/><div className="track-body"><strong>{t.title}</strong><small>완청 {t.completed} · 좋아요 {t.liked} · 새김 {t.engraved}</small></div></div>)}</div>:<div className="empty">이 달에는 감상 기록이 없어요.</div>}</>;}
-      case "taste-offer":return <><Heading title="1분 검사로 더 맞는 노래를 골라 드려요" desc="12문항 · 둘 중 하나 고르기"/><LP/><div className="actions"><Btn disabled={busy} onClick={()=>startQuiz("flow")}>검사하기</Btn><Btn disabled={busy} variant="secondary" onClick={()=>recommendFor(draft.mood,{useTaste:false})}>건너뛰기</Btn></div></>;
+      case "taste-offer":return <><Heading title="1분 검사로 더 맞는 노래를 골라 드려요" desc="12문항 · 둘 중 하나 고르기"/><LP/><div className="actions"><Btn disabled={busy} onClick={()=>startQuiz("flow")}>검사하기</Btn><Btn disabled={busy} variant="secondary" onClick={()=>recommendFor(draft.mood,{taste:null})}>건너뛰기</Btn></div></>;
       case "taste-quiz":{if(!quiz)return null;const question=QUESTIONS[QUESTION_ORDER[quiz.pos]];return <><Heading title={question.text} desc={`${quiz.pos+1} / ${QUESTIONS.length}`}/><div className="actions">{[["가",question.a],["나",question.b]].map(([choice,text])=><Btn key={`${quiz.pos}-${choice}`} variant="secondary" onClick={()=>answerQuiz(choice)}>{text}</Btn>)}</div></>;}
-      case "taste-result":{const taste=parseTaste(read(TASTE_KEY,null));if(!taste)return null;const toFlow=quiz?.from!=="daytype"&&draft.mood;return <><Heading title="나의 취향 유형"/><TasteCard taste={taste}/><div className="actions">{toFlow?<Btn disabled={busy} onClick={()=>recommendFor(draft.mood)}>추천 받으러 가기</Btn>:<Btn onClick={()=>go("daytype")}>확인</Btn>}</div></>;}
+      case "taste-result":{
+        const taste=quiz?.taste??parseTaste(read(TASTE_KEY,null));
+        if(!taste)return null;
+        const toFlow=quiz?.from!=="daytype"&&draft.mood;
+        return <><Heading title="나의 취향 유형"/><TasteCard taste={taste}/>
+          {quiz?.tasteSaved===false&&<Notice kind="warn">검사 결과를 이 브라우저에 저장하지 못했어요. 이번 검사에서만 사용할 수 있어요.</Notice>}
+          <div className="actions">{toFlow?<Btn disabled={busy} onClick={()=>recommendFor(draft.mood,{taste})}>추천 받으러 가기</Btn>:<Btn onClick={()=>go("daytype")}>확인</Btn>}</div></>;
+      }
       case "daytype":{const summary=dayType(todaysRecord?.mood),taste=parseTaste(read(TASTE_KEY,null));return <><Heading title="Day Type" desc="오늘 남긴 기록으로 하루를 돌아봐요."/>{taste?<><TasteCard taste={taste}/><div className="actions"><Btn variant="secondary" onClick={()=>startQuiz("daytype")}>다시 검사하기</Btn></div></>:<div className="actions"><Btn variant="secondary" onClick={()=>startQuiz("daytype")}>유형 검사하기</Btn></div>}<LP/>{summary?<div className="surface center"><h2>{summary.title}</h2><Mood id={todaysRecord.mood}/><p>{summary.copy}</p><small>직접 확정한 감정에 맞춘 시연용 문구예요.</small></div>:<div className="empty">오늘의 LP판을 저장하면 이곳에서 볼 수 있어요.</div>}<div className="actions"><Btn variant="secondary" onClick={()=>goToday(today)}>오늘의 LP판 보기</Btn></div></>;}
       case "heard":return <><Heading title="이렇게 들었어요" desc="소리가 짧거나 주변 소리일 수 있어서 아직 저장하지 않았어요."/><div className="surface center"><h2>“{draft.input}”</h2></div><div className="actions"><Btn onClick={manual}>이대로 기록하기</Btn><Btn variant="secondary" onClick={()=>go("voice")}>다시 녹음하기</Btn><button className="link" onClick={()=>go("record")}>글로 기록하기</button></div><Notice>이대로 기록하면 감정을 직접 골라 주세요. 다시 녹음하거나 나가면 오늘 기록은 그대로예요.</Notice></>;
       case "failure":return <><Heading title={PAGES.failure[0]} desc={message||"지금 마음은 직접 고를 수 있어요."}/><div className="actions"><Btn onClick={manual}>감정 직접 선택</Btn><Btn variant="secondary" onClick={()=>go("record")}>글로 다시 기록하기</Btn></div></>;
