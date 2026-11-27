@@ -59,6 +59,13 @@ def test_load_encoder_passes_cache_dir(monkeypatch):
 
     monkeypatch.setattr(transformers.AutoFeatureExtractor, "from_pretrained", fake)
     monkeypatch.setattr(transformers.AutoModel, "from_pretrained", fake)
+    monkeypatch.delenv("MOODWAVE_HF_CACHE", raising=False)
     features.load_encoder("hubert")
     assert [Path(kw["cache_dir"]) for kw in seen] == [Path(features.HF_CACHE) / "hub"] * 2
     assert all(kw["local_files_only"] for kw in seen)
+
+    # 받아쓰기와 같은 환경 변수로 캐시 위치를 바꿀 수 있음
+    seen.clear()
+    monkeypatch.setenv("MOODWAVE_HF_CACHE", r"D:\other\hub")
+    features.load_encoder("hubert")
+    assert [kw["cache_dir"] for kw in seen] == [r"D:\other\hub"] * 2

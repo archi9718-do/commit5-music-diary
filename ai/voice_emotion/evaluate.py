@@ -35,7 +35,8 @@ def choose_w(text_results: list[dict], voice_probs: list[dict], golds: list[str]
 
 
 def bootstrap_lower(golds, preds_a, preds_b, n: int = 1000, seed: int = 42) -> float:
-    """같은 문장 묶음을 n번 다시 뽑아 macro_f1(b) − macro_f1(a)의 2.5% 분위수."""
+    """녹음을 한 줄씩 n번 다시 뽑아 macro_f1(b) − macro_f1(a)의 2.5% 분위수.
+    같은 문장을 여러 사람이 녹음한 줄끼리 닮아서 구간이 실제보다 좁게 나올 수 있습니다."""
     rng = np.random.default_rng(seed)
     g, a, b = np.array(golds), np.array(preds_a), np.array(preds_b)
     diffs = []
