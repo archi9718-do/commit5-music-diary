@@ -63,9 +63,20 @@ except Exception as exc:  # noqa: BLE001
 else:
     _STT_IMPORT_ERROR = ""
 
+try:
+    # 목소리 감정도 같은 방식: 패키지·모델이 없거나 꺼짐 판정이면 녹음은 글 감정만 씀
+    from ai.voice_emotion import service as voice_service
+# 의도한 넓은 예외 처리: torch·transformers·모델 패키지에서 어떤 오류가 나도 서버는 켜져야 합니다.
+except Exception as exc:  # noqa: BLE001
+    voice_service = None
+    _VOICE_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+else:
+    _VOICE_IMPORT_ERROR = ""
+
 # 감정 분석·받아쓰기를 쓸 수 있는지 기록해 두는 상태값 (서버가 켜질 때 정해집니다)
 EMOTION_STATUS = {"ready": False, "reason": "서버 시작 전"}
 STT_STATUS = {"ready": False, "reason": "서버 시작 전"}
+VOICE_STATUS = {"ready": False, "reason": "서버 시작 전"}
 
 
 def _prepare(status: dict, service, import_error: str, label: str) -> None:
@@ -92,6 +103,10 @@ def prepare_emotion_model() -> None:
 
 def prepare_stt_model() -> None:
     _prepare(STT_STATUS, stt_service, _STT_IMPORT_ERROR, "받아쓰기")
+
+
+def prepare_voice_model() -> None:
+    _prepare(VOICE_STATUS, voice_service, _VOICE_IMPORT_ERROR, "목소리 감정")
 # -------------------------------------------------------------------------
 
 
@@ -100,6 +115,7 @@ async def lifespan(app: FastAPI):
     init_db()
     prepare_emotion_model()  # 감정 모델은 서버가 켜질 때 한 번만 불러옵니다.
     prepare_stt_model()  # 받아쓰기 모델도 미리 불러와 첫 녹음이 느리지 않게 합니다.
+    prepare_voice_model()  # 목소리 감정은 meta.json이 켜기 판정일 때만 켜집니다.
     reasons.agent_warm_up()  # 추천 이유 에이전트도 연결을 미리 맺어 첫 요청이 10초를 넘지 않게 합니다.
     yield
 
@@ -174,8 +190,8 @@ def _log_model_failure(label: str, exc: Exception) -> None:
     logger.warning("%s 실패: %s [%s]", label, type(exc).__name__, locations)
 
 
-def _analyze_and_save(text: str, participant: str | None = None) -> EmotionResult:
-    """글 분석 → 양식 검사 → 저장. 글(analyze)과 녹음(voice) 경로가 함께 씁니다."""
+def _analyze_and_save(text: str, participant: str | None = None, audio: bytes | None = None) -> EmotionResult:
+    """글 감정을 검증하고, 녹음이면 검증된 결합 결과를 우선해 저장합니다."""
     _check_emotion_ready()
 
     # 1) 감정 분석 먼저 (아직 DB에 아무것도 쓰지 않음)
@@ -192,6 +208,14 @@ def _analyze_and_save(text: str, participant: str | None = None) -> EmotionResul
         # 검증 예외 본문에는 사용자의 일기나 모델 입력값이 포함될 수 있습니다.
         logger.error("감정 결과 양식 오류: %s", type(exc).__name__)
         raise HTTPException(status_code=500, detail="감정 결과 양식이 올바르지 않습니다.") from exc
+
+    # 2-2) 유효한 결합 결과만 채택하고, 실패하면 검증해 둔 글 결과로 저장합니다.
+    if audio is not None and VOICE_STATUS["ready"] and voice_service is not None:
+        try:
+            combined = voice_service.combine(result, audio)
+            checked = EmotionResult(**{**combined, "record_id": 1, "text": text})
+        except Exception as exc:  # noqa: BLE001
+            _log_model_failure("목소리 감정", exc)
 
     # 3) 기록과 감정 결과를 한 번에 저장 (/api/emotions와 같은 칸에 저장)
     con = connect()
@@ -214,7 +238,7 @@ MAX_AUDIO_BYTES = 3 * 1024 * 1024  # 10초 wav(48kHz 스테레오) 약 1.9MB + �
 
 @app.post("/api/records/voice", status_code=201, response_model=EmotionResult, tags=["감정 인식 연동"])
 async def analyze_voice(request: Request, x_participant: Participant = None):
-    """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기 → 글 감정 분석 → 저장까지 합니다.
+    """녹음 파일을 요청 본문 그대로(raw body) 받아 받아쓰기와 감정 분석을 거쳐 저장합니다.
 
     - 응답·저장·같은 날 덮어쓰기 규칙은 POST /api/records/analyze와 같습니다.
     - 녹음은 메모리에서만 처리하고 디스크에 쓰지 않습니다(multipart 임시 파일 없음).
@@ -269,7 +293,7 @@ def _voice_to_result(audio: bytes, participant: str | None = None) -> EmotionRes
             "code": "uncertain_transcript", "text": text,
             "message": "이렇게 들었어요. 맞으면 이대로 기록하고, 아니면 다시 녹음해 주세요.",
         })
-    return _analyze_and_save(text, participant)
+    return _analyze_and_save(text, participant, audio)
 
 
 @app.post("/api/emotions", tags=["감정 인식 연동"])

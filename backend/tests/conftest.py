@@ -18,3 +18,9 @@ def no_agent_warm_up(monkeypatch):
     from app import reasons
 
     monkeypatch.setattr(reasons, "agent_warm_up", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def no_real_voice_emotion(monkeypatch):
+    """진짜 목소리 인코더를 서버 시작마다 불러오지 않게 꺼 둡니다. 목소리 시험(test_voice.py)은 가짜를 끼워 넣습니다."""
+    monkeypatch.setattr(main, "voice_service", None)
