@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.recommender import ScoreDataError, load_song_scores, recommend_three
+from app.schemas import SIDES
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_song_scores.csv"
 
@@ -92,3 +93,31 @@ def test_out_of_range_and_duplicate_ids_rejected(tmp_path):
     invalid.write_text("song_id,dataset,valence,arousal\ndeam_2,DEAM,1.2,0.5\n", encoding="utf-8")
     with pytest.raises(ScoreDataError, match="0~1"):
         load_song_scores(invalid)
+
+
+NEW_STEPS = {
+    ("가라앉음", "머무름"): ["맞추기", "곁에 머물기", "잔잔하게 마무리"],
+    ("예민함", "발산"): ["맞추기", "쏟아내기", "끝까지 쏟아내기"],
+    ("좋음", "증폭"): ["맞추기", "더 신나게", "끌어올리기"],
+    ("무난함", "전환"): ["맞추기", "조금 밝게", "활기차게"],
+}
+
+
+@pytest.mark.parametrize(("emotion", "side"), NEW_STEPS)
+def test_new_sides_return_three_songs_with_their_steps(monkeypatch, emotion, side):
+    monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(FIXTURE))
+    songs = recommend_three(emotion, side=side)
+    assert [s.step for s in songs] == NEW_STEPS[(emotion, side)]
+    assert len({s.song_id for s in songs}) == 3
+
+
+@pytest.mark.parametrize("emotion", ["좋음", "무난함", "가라앉음", "예민함"])
+def test_default_side_equals_no_side(monkeypatch, emotion):
+    monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(FIXTURE))
+    assert recommend_three(emotion) == recommend_three(emotion, side=SIDES[emotion][0])
+
+
+def test_side_of_other_emotion_is_rejected(monkeypatch):
+    monkeypatch.setenv("MOODWAVE_SCORES_CSV", str(FIXTURE))
+    with pytest.raises(ValueError):
+        recommend_three("가라앉음", side="발산")
